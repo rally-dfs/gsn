@@ -25,5 +25,5 @@ export const AsyncZeroAddressCalldataGasEstimation: CalldataGasEstimation = asyn
     to: constants.ZERO_ADDRESS,
     data: calldata
   })
-  return parseInt(estimateGasCallToZero.toString()) * calldataEstimationSlackFactor
+  return Math.round(parseInt(estimateGasCallToZero.toString()) * calldataEstimationSlackFactor)
 }

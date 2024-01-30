@@ -149,6 +149,11 @@ export interface ServerConfigParams {
   calldataEstimationSlackFactor: number
 
   /**
+   * Whether to use calldata gas estimation and slack factor, regardless of environment's default.
+   */
+  useEstimateGasForCalldataCost: boolean
+
+  /**
    * The URL to access to get the gas price from.
    * This is done instead of reading the 'gasPrice'/'maxPriorityFeePerGas' from the RPC node.
    */
@@ -350,6 +355,7 @@ export const serverDefaultConfiguration: ServerConfigParams = {
   whitelistedRecipients: [],
   gasPriceFactor: 1,
   calldataEstimationSlackFactor: 1,
+  useEstimateGasForCalldataCost: false,
   gasPriceOracleUrl: '',
   gasPriceOraclePath: '',
   workerMinBalance: 0.1e18.toString(),
@@ -398,6 +404,7 @@ const ConfigParamsTypes = {
   relayHubAddress: 'string',
   gasPriceFactor: 'number',
   calldataEstimationSlackFactor: 'number',
+  useEstimateGasForCalldataCost: 'boolean',
   gasPriceOracleUrl: 'string',
   gasPriceOraclePath: 'string',
   ethereumNodeUrl: 'string',
@@ -561,6 +568,7 @@ export async function resolveServerConfig (config: Partial<ServerConfigParams>, 
   const contractInteractor: ContractInteractor = new ContractInteractor({
     maxPageSize: config.pastEventsQueryMaxPageSize ?? Number.MAX_SAFE_INTEGER,
     calldataEstimationSlackFactor: config.calldataEstimationSlackFactor ?? 1,
+    forceUseEstimateGasForCalldataCost: config.useEstimateGasForCalldataCost ?? false,
     provider: ethersProvider,
     signer: ethersProvider.getSigner(config.ownerAddress),
     logger,

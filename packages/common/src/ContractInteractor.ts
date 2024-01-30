@@ -84,6 +84,7 @@ export interface ConstructorParams {
   versionManager?: VersionsManager
   deployment?: GSNContractsDeployment
   calldataEstimationSlackFactor?: number
+  forceUseEstimateGasForCalldataCost?: boolean
   maxPageSize: number
   maxPageCount?: number
   environment: Environment
@@ -171,7 +172,8 @@ export class ContractInteractor {
       environment,
       calldataEstimationSlackFactor,
       domainSeparatorName,
-      deployment = {}
+      deployment = {},
+      forceUseEstimateGasForCalldataCost = false,
     }: ConstructorParams) {
     this.maxPageSize = maxPageSize
     this.maxPageCount = maxPageCount ?? Number.MAX_SAFE_INTEGER
@@ -184,7 +186,7 @@ export class ContractInteractor {
     this.lastBlockNumber = 0
     this.environment = environment
     this.calculateCalldataGasUsed =
-      this.environment.useEstimateGasForCalldataCost
+      this.environment.useEstimateGasForCalldataCost || forceUseEstimateGasForCalldataCost
         ? AsyncZeroAddressCalldataGasEstimation
         : MainnetCalldataGasEstimation
     this.domainSeparatorName = domainSeparatorName ?? ''

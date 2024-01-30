@@ -10,5 +10,7 @@
   "workerTargetBalance": "2000000000000000000",
   "managerMinBalance": "1000000000000000000",
   "managerTargetBalance": "2000000000000000000",
-  "runPaymasterReputations": false
+  "runPaymasterReputations": false,
+  "calldataEstimationSlackFactor": 0.3,
+  "useEstimateGasForCalldataCost": true
 }

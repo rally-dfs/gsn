@@ -169,6 +169,7 @@ async function run (): Promise<void> {
     logger,
     environment,
     calldataEstimationSlackFactor: config.calldataEstimationSlackFactor,
+    forceUseEstimateGasForCalldataCost: config.useEstimateGasForCalldataCost,
     maxPageSize: config.pastEventsQueryMaxPageSize,
     versionManager: new VersionsManager(gsnRuntimeVersion, config.requiredVersionRange ?? gsnRequiredVersion),
     deployment: {
