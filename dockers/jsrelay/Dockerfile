@@ -1,3 +1,3 @@
-FROM node:13-buster-slim
+FROM node:20.11-buster-slim
 COPY dist/relayserver.js app/
 CMD node --no-deprecation /app/relayserver.js

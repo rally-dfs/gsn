@@ -80,7 +80,10 @@ async function run (): Promise<void> {
     const loggingProvider: LoggingProviderMode = conf.loggingProvider ?? LoggingProviderMode.NONE
     conf.environmentName = conf.environmentName ?? EnvironmentsKeys.ethereumMainnet
     web3provider = new Web3.providers.HttpProvider(conf.ethereumNodeUrl)
-    ethersJsonRpcProvider = new StaticJsonRpcProvider(conf.ethereumNodeUrl)
+    ethersJsonRpcProvider = new StaticJsonRpcProvider({
+      url: conf.ethereumNodeUrl,
+      skipFetchSetup: true
+    })
 
     if (loggingProvider !== LoggingProviderMode.NONE) {
       const orig = web3provider
