@@ -162,7 +162,7 @@ async function run (): Promise<void> {
   console.log('Creating interactor...\n')
   const contractInteractor = new ContractInteractor({
     provider: ethersJsonRpcProvider,
-    signer: ethersJsonRpcProvider.getSigner(),
+    signer: ethersJsonRpcProvider.getSigner(config.ownerAddress),
     logger,
     environment,
     calldataEstimationSlackFactor: config.calldataEstimationSlackFactor,

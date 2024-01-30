@@ -562,7 +562,7 @@ export async function resolveServerConfig (config: Partial<ServerConfigParams>, 
     maxPageSize: config.pastEventsQueryMaxPageSize ?? Number.MAX_SAFE_INTEGER,
     calldataEstimationSlackFactor: config.calldataEstimationSlackFactor ?? 1,
     provider: ethersProvider,
-    signer: ethersProvider.getSigner(),
+    signer: ethersProvider.getSigner(config.ownerAddress),
     logger,
     deployment: {
       relayHubAddress: config.relayHubAddress
