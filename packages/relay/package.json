@@ -8,6 +8,7 @@
     "README.md"
   ],
   "scripts": {
+    "dev": "node dist/runServer.js",
     "tsc": "tsc",
     "watch-tsc": "tsc -w --preserveWatchOutput",
     "lint": "eslint -f unix .",
