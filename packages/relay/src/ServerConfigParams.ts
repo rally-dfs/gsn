@@ -1,26 +1,30 @@
 import * as fs from 'fs'
 import parseArgs from 'minimist'
 
+import { type JsonRpcProvider } from '@ethersproject/providers'
+
 import {
-  Address,
+  type Address,
   ContractInteractor,
-  Environment,
+  type Environment,
   EnvironmentsKeys,
-  LoggerInterface,
-  NpmLogLevel,
+  type LoggerInterface,
+  type NpmLogLevel,
+  type RelayCallGasLimitCalculationHelper,
   constants,
   defaultEnvironment,
   environments
 } from '@opengsn/common'
 
-import { KeyManager } from './KeyManager'
-import { TxStoreManager } from './TxStoreManager'
+import { type KeyManager } from './KeyManager'
+import { type TxStoreManager } from './TxStoreManager'
 import { createServerLogger } from '@opengsn/logger/dist/ServerWinstonLogger'
 
-import { GasPriceFetcher } from './GasPriceFetcher'
-import { ReputationManager, ReputationManagerConfiguration } from './ReputationManager'
+import { type GasPriceFetcher } from './GasPriceFetcher'
+import { type ReputationManager, type ReputationManagerConfiguration } from './ReputationManager'
 
 import { toBN } from 'web3-utils'
+import { type Web3MethodsBuilder } from './Web3MethodsBuilder'
 
 export enum LoggingProviderMode {
   NONE,
@@ -139,6 +143,17 @@ export interface ServerConfigParams {
   gasPriceFactor: number
 
   /**
+   * If the calldata gas estimation is non-deterministic, as is the case on L2s, use a factor to supply some extra gas.
+   * Note that the server should have a smaller factor then the clients to avoid rejecting valid Relay Requests.
+   */
+  calldataEstimationSlackFactor: number
+
+  /**
+   * Whether to use calldata gas estimation and slack factor, regardless of environment's default.
+   */
+  useEstimateGasForCalldataCost: boolean
+
+  /**
    * The URL to access to get the gas price from.
    * This is done instead of reading the 'gasPrice'/'maxPriorityFeePerGas' from the RPC node.
    */
@@ -178,23 +193,23 @@ export interface ServerConfigParams {
   /**
    * The minimum balance of the worker. If the balance gets lower than that Relay Manager will top it up.
    */
-  workerMinBalance: number
+  workerMinBalance: string
 
   /**
    * The balance of the worker that the Relay will try to maintain by sending funds to it from the Manager.
    */
-  workerTargetBalance: number
+  workerTargetBalance: string
 
   /**
    * The minimum balance of the Relay Manager.
    * If the balance gets lower than that Relay Manager will pull its revenue from the RelayHub.
    */
-  managerMinBalance: number
+  managerMinBalance: string
 
   /**
    * The balance of the Relay Manager that the Relay will try to maintain by pulling its revenue from the RelayHub.
    */
-  managerTargetBalance: number
+  managerTargetBalance: string
 
   /**
    * The address of the ERC-20 tokens that are used as stake kept on the StakeManager contract.
@@ -204,7 +219,7 @@ export interface ServerConfigParams {
   /**
    * If the balance of the Relay Manager on the RelayHub is above this value it will be sent to the owner.
    */
-  withdrawToOwnerOnBalance?: number
+  withdrawToOwnerOnBalance?: string
 
   /**
    * The Relay will re-read relevant blockchain state after so many blocks.
@@ -294,7 +309,7 @@ export interface ServerConfigParams {
   pastEventsQueryMaxPageCount: number
 
   /**
-   * The name of preconfigured network. Supported values: "ganacheLocal", "ethereumMainnet", "arbitrum".
+   * The name of preconfigured network. Supported values: "ethereumMainnet", "arbitrum".
    */
   environmentName?: string
 
@@ -314,6 +329,8 @@ export interface ServerDependencies {
   managerKeyManager: KeyManager
   workersKeyManager: KeyManager
   contractInteractor: ContractInteractor
+  gasLimitCalculator: RelayCallGasLimitCalculationHelper
+  web3MethodsBuilder: Web3MethodsBuilder
   gasPriceFetcher: GasPriceFetcher
   txStoreManager: TxStoreManager
   reputationManager?: ReputationManager
@@ -337,13 +354,15 @@ export const serverDefaultConfiguration: ServerConfigParams = {
   whitelistedPaymasters: [],
   whitelistedRecipients: [],
   gasPriceFactor: 1,
+  calldataEstimationSlackFactor: 1,
+  useEstimateGasForCalldataCost: false,
   gasPriceOracleUrl: '',
   gasPriceOraclePath: '',
-  workerMinBalance: 0.1e18,
-  workerTargetBalance: 0.3e18,
-  managerMinBalance: 0.1e18, // 0.1 eth
+  workerMinBalance: 0.1e18.toString(),
+  workerTargetBalance: 0.3e18.toString(),
+  managerMinBalance: 0.1e18.toString(), // 0.1 eth
   managerStakeTokenAddress: constants.ZERO_ADDRESS,
-  managerTargetBalance: 0.3e18,
+  managerTargetBalance: 0.3e18.toString(),
   checkInterval: 10000,
   devMode: false,
   loggingProvider: LoggingProviderMode.NONE,
@@ -384,6 +403,8 @@ const ConfigParamsTypes = {
   port: 'number',
   relayHubAddress: 'string',
   gasPriceFactor: 'number',
+  calldataEstimationSlackFactor: 'number',
+  useEstimateGasForCalldataCost: 'boolean',
   gasPriceOracleUrl: 'string',
   gasPriceOraclePath: 'string',
   ethereumNodeUrl: 'string',
@@ -402,13 +423,13 @@ const ConfigParamsTypes = {
   maxAcceptanceBudget: 'number',
   alertedDelaySeconds: 'number',
 
-  workerMinBalance: 'number',
-  workerTargetBalance: 'number',
-  managerMinBalance: 'number',
+  workerMinBalance: 'string',
+  workerTargetBalance: 'string',
+  managerMinBalance: 'string',
   managerMinStake: 'string',
   managerStakeTokenAddress: 'string',
   managerTargetBalance: 'number',
-  withdrawToOwnerOnBalance: 'number',
+  withdrawToOwnerOnBalance: 'string',
   defaultGasLimit: 'number',
   requestMinValidSeconds: 'number',
 
@@ -527,7 +548,7 @@ export function parseServerConfig (args: string[], env: any): any {
 }
 
 // resolve params, and validate the resulting struct
-export async function resolveServerConfig (config: Partial<ServerConfigParams>, web3provider: any): Promise<{
+export async function resolveServerConfig (config: Partial<ServerConfigParams>, ethersProvider: JsonRpcProvider): Promise<{
   config: ServerConfigParams
   environment: Environment
 }> {
@@ -546,16 +567,17 @@ export async function resolveServerConfig (config: Partial<ServerConfigParams>, 
   const logger = createServerLogger(config.logLevel ?? 'debug', config.loggerUrl ?? '', config.loggerUserId ?? '')
   const contractInteractor: ContractInteractor = new ContractInteractor({
     maxPageSize: config.pastEventsQueryMaxPageSize ?? Number.MAX_SAFE_INTEGER,
-    provider: web3provider,
+    calldataEstimationSlackFactor: config.calldataEstimationSlackFactor ?? 1,
+    forceUseEstimateGasForCalldataCost: config.useEstimateGasForCalldataCost ?? false,
+    provider: ethersProvider,
+    signer: ethersProvider.getSigner(config.ownerAddress),
     logger,
     deployment: {
       relayHubAddress: config.relayHubAddress
     },
     environment
   })
-  await contractInteractor._resolveDeployment()
-  await contractInteractor._initializeContracts()
-  await contractInteractor._initializeNetworkParams()
+  await contractInteractor.init()
 
   if (config.relayHubAddress == null) {
     error('missing param: must have relayHubAddress')

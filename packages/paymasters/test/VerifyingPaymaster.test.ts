@@ -1,20 +1,25 @@
-import { SampleRecipientInstance, VerifyingPaymasterInstance } from '../types/truffle-contracts'
+import { StaticJsonRpcProvider } from '@ethersproject/providers'
+import { type SampleRecipientInstance, type VerifyingPaymasterInstance } from '../types/truffle-contracts'
 
-import { GSNUnresolvedConstructorInput, RelayProvider, GSNConfig } from '@opengsn/provider'
+import { type GSNUnresolvedConstructorInput, RelayProvider, type GSNConfig } from '@opengsn/provider'
 import { GsnTestEnvironment } from '@opengsn/cli/dist/GsnTestEnvironment'
 import { expectRevert } from '@openzeppelin/test-helpers'
 
-import { RelayRequest, ApprovalDataCallback } from '@opengsn/common'
+import { type RelayRequest, type ApprovalDataCallback } from '@opengsn/common'
 
-import { bufferToHex, privateToAddress, PrefixedHexString } from 'ethereumjs-util'
+import { bufferToHex, privateToAddress, type PrefixedHexString } from 'ethereumjs-util'
 import { randomBytes } from 'crypto'
 import { getRequestHash, packForwardRequest, packRelayData, signRelayRequest } from '../src/VerifyingPaymasterUtils'
-import { HttpProvider } from 'web3-core'
+import { type HttpProvider } from 'web3-core'
 
 const VerifyingPaymaster = artifacts.require('VerifyingPaymaster')
 const SampleRecipient = artifacts.require('SampleRecipient')
 
 contract('VerifyingPaymaster', ([from]) => {
+  // @ts-ignore
+  const currentProviderHost = web3.currentProvider.host
+  const provider = new StaticJsonRpcProvider(currentProviderHost)
+
   describe('#getRequestHash', () => {
     let req: RelayRequest
     let pm: VerifyingPaymasterInstance
@@ -104,14 +109,13 @@ contract('VerifyingPaymaster', ([from]) => {
         paymasterAddress: pm.address
       }
       const input: GSNUnresolvedConstructorInput = {
-        provider: web3.currentProvider as HttpProvider,
+        provider,
         config: gsnConfig,
         overrideDependencies: {
           asyncApprovalData: mockGetApprovalData
         }
       }
-      const p = RelayProvider.newProvider(input)
-      await p.init()
+      const p = await RelayProvider.newWeb3Provider(input)
       // @ts-ignore
       SampleRecipient.web3.setProvider(p)
     })

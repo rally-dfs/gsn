@@ -1,14 +1,19 @@
-import { Contract, providers } from 'ethers'
-import { Eip1193Bridge } from '@ethersproject/experimental'
-import { ExternalProvider } from '@ethersproject/providers'
-import { Signer } from '@ethersproject/abstract-signer'
+import { type Contract, providers } from 'ethers'
+import { type ExternalProvider, type JsonRpcProvider } from '@ethersproject/providers'
+import { type Signer } from '@ethersproject/abstract-signer'
 
-import { TokenPaymasterConfig, TokenPaymasterProvider } from './TokenPaymasterProvider'
-import { GSNDependencies, WrapBridge } from '@opengsn/provider/dist'
+import { TokenPaymasterProvider } from './TokenPaymasterProvider'
+import {
+  type Address,
+  type GSNConfig,
+  type GSNDependencies,
+  type GSNUnresolvedConstructorInput,
+  type SupportedTokenSymbols
+} from '@opengsn/provider'
 
 async function wrapContract (
   contract: Contract,
-  config: Partial<TokenPaymasterConfig>,
+  config: Partial<GSNConfig>,
   overrideDependencies?: Partial<GSNDependencies>
 ): Promise<Contract> {
   const signer = await wrapSigner(contract.signer, config, overrideDependencies)
@@ -17,18 +22,22 @@ async function wrapContract (
 
 async function wrapSigner (
   signer: Signer,
-  config: Partial<TokenPaymasterConfig>,
-  overrideDependencies?: Partial<GSNDependencies>): Promise<Signer> {
-  const bridge = new WrapBridge(new Eip1193Bridge(signer, signer.provider))
-  const input = {
-    provider: bridge,
+  config: Partial<GSNConfig>,
+  overrideDependencies?: Partial<GSNDependencies>,
+  permitERC20TokenForGas?: Address | SupportedTokenSymbols): Promise<Signer> {
+  const provider = signer.provider
+  if (provider == null) {
+    throw new Error('GSN requires a Signer instance with a provider to wrap it')
+  }
+  const input: GSNUnresolvedConstructorInput = {
+    provider: provider as JsonRpcProvider,
     config,
     overrideDependencies
   }
 
-  // types have a very small conflict about whether "jsonrpc" field is actually required so not worth wrapping again
-  const gsnProvider = await TokenPaymasterProvider.newProvider(input).init() as any as ExternalProvider
-  const ethersProvider = new providers.Web3Provider(gsnProvider)
+  const gsnProvider = await TokenPaymasterProvider.newProvider(input).init(permitERC20TokenForGas)
+  const gsnExternalProvider = gsnProvider as any as ExternalProvider
+  const ethersProvider = new providers.Web3Provider(gsnExternalProvider)
   const address = await signer.getAddress()
   return ethersProvider.getSigner(address)
 }

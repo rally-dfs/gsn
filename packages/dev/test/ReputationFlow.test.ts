@@ -1,10 +1,15 @@
-import { TestPaymasterConfigurableMisbehaviorInstance, TestRecipientInstance } from '@opengsn/contracts'
+import {
+  type RelayHubInstance,
+  type TestPaymasterConfigurableMisbehaviorInstance,
+  type TestRecipientInstance
+} from '../types/truffle-contracts'
 import { evmMine } from './TestUtils'
-import { HttpProvider } from 'web3-core'
+import { type HttpProvider } from 'web3-core'
 import { RelayProvider } from '@opengsn/provider/dist/RelayProvider'
 import sinon from 'sinon'
-import { GsnTestEnvironment, TestEnvironment } from '@opengsn/cli/dist/GsnTestEnvironment'
-import { RelayHubInstance } from '@opengsn/contracts/types/truffle-contracts'
+import { GsnTestEnvironment, type TestEnvironment } from '@opengsn/cli/dist/GsnTestEnvironment'
+import { StaticJsonRpcProvider } from '@ethersproject/providers'
+import { BigNumber } from '@ethersproject/bignumber'
 
 const TestPaymasterConfigurableMisbehavior = artifacts.require('TestPaymasterConfigurableMisbehavior')
 const TestRecipient = artifacts.require('TestRecipient')
@@ -12,6 +17,10 @@ const Forwarder = artifacts.require('Forwarder')
 const RelayHub = artifacts.require('RelayHub')
 
 contract('ReputationFlow', function () {
+  // @ts-ignore
+  const currentProviderHost = web3.currentProvider.host
+  const ethersProvider = new StaticJsonRpcProvider(currentProviderHost)
+
   let misbehavingPaymaster: TestPaymasterConfigurableMisbehaviorInstance
   let testRecipient: TestRecipientInstance
   let relayProvider: RelayProvider
@@ -31,13 +40,13 @@ contract('ReputationFlow', function () {
     await misbehavingPaymaster.setRelayHub(relayHub.address)
     await misbehavingPaymaster.deposit({ value: web3.utils.toWei('1', 'ether') })
 
-    relayProvider = await RelayProvider.newProvider({
-      provider: web3.currentProvider as HttpProvider,
+    relayProvider = await RelayProvider.newWeb3Provider({
+      provider: ethersProvider,
       config: {
         loggerConfiguration: { logLevel: 'error' },
         paymasterAddress: misbehavingPaymaster.address
       }
-    }).init()
+    })
     // @ts-ignore
     TestRecipient.web3.setProvider(relayProvider)
   })
@@ -48,8 +57,16 @@ contract('ReputationFlow', function () {
 
   describe('with misbehaving paymaster', function () {
     it('should stop serving the paymaster after specified number of on-chain rejected transactions', async function () {
-      sinon.stub(relayProvider.relayClient.dependencies.contractInteractor, 'validateRelayCall').returns(Promise.resolve({ paymasterAccepted: true, returnValue: '', relayHubReverted: false, recipientReverted: false }))
-      sinon.stub(relayProvider.relayClient.dependencies.contractInteractor, 'getGasFees').returns(Promise.resolve({ priorityFeePerGas: 30e9.toString(), baseFeePerGas: 30e9.toString() }))
+      sinon.stub(relayProvider.relayClient.dependencies.contractInteractor, 'validateRelayCall').returns(Promise.resolve({
+        paymasterAccepted: true,
+        returnValue: '',
+        relayHubReverted: false,
+        recipientReverted: false
+      }))
+      sinon.stub(relayProvider.relayClient.dependencies.contractInteractor, 'getGasFees').returns(Promise.resolve({
+        priorityFeePerGas: BigNumber.from(30e9),
+        baseFeePerGas: BigNumber.from(30e9)
+      }))
       sinon.stub(testEnv.httpServer.relayService!, 'validateViewCallSucceeds')
       for (let i = 0; i < 20; i++) {
         const block = await web3.eth.getBlockNumber()

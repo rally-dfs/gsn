@@ -1,19 +1,20 @@
 import bodyParser from 'body-parser'
 import cors from 'cors'
-import express, { Express, Request, Response } from 'express'
-import { Server } from 'http'
+import express, { type Express, type Request, type Response } from 'express'
+import { type Server } from 'http'
 import ow from 'ow'
 
-import { PenalizerService } from './penalizer/PenalizerService'
+import { type PenalizerService } from './penalizer/PenalizerService'
 import {
-  AuditRequest,
+  type AuditRequest,
   AuditRequestShape,
-  AuditResponse,
-  LoggerInterface,
+  type AuditResponse,
+  type LoggerInterface,
   RelayTransactionRequestShape
 } from '@opengsn/common'
-import { RelayServer } from './RelayServer'
+import { type RelayServer } from './RelayServer'
 
+// eslint-disable-next-line @typescript-eslint/consistent-indexed-object-style
 export interface ParamsDictionary {
   [key: string]: string
 }
@@ -38,16 +39,23 @@ export class HttpServer {
       // used to work before workspaces, needs research
       // eslint-disable-next-line @typescript-eslint/no-misused-promises
       this.app.post('/getaddr', this.pingHandler.bind(this))
+
       // used to work before workspaces, needs research
       // eslint-disable-next-line @typescript-eslint/no-misused-promises
       this.app.get('/getaddr', this.pingHandler.bind(this))
+
       // eslint-disable-next-line @typescript-eslint/no-misused-promises
       this.app.post('/stats', this.statsHandler.bind(this))
+
       // eslint-disable-next-line @typescript-eslint/no-misused-promises
       this.app.get('/stats', this.statsHandler.bind(this))
+
       // used to work before workspaces, needs research
       // eslint-disable-next-line @typescript-eslint/no-misused-promises
       this.app.post('/relay', this.relayHandler.bind(this))
+
+      this.app.get('/readyhealth', this.readyHealthHandler.bind(this))
+
       this.relayService.on('error', (e) => { console.error('httpServer:', e) })
     }
 
@@ -93,6 +101,21 @@ export class HttpServer {
       const message: string = e.message
       res.send({ message })
       this.logger.error(`ping handler rejected: ${message}`)
+    }
+  }
+
+  async readyHealthHandler (req: Request, res: Response): Promise<void> {
+    try {
+      const isReady = this.relayService != null && this.relayService.isReady()
+      const status = isReady ? 200 : 500
+      res.status(status).send({ ready: isReady })
+
+      this.logger.info(`ready health handler returned ${status} ready=${isReady}`)
+    } catch (e: any) {
+      const message: string = e.message
+      res.status(500).send({ message })
+
+      this.logger.error(`ready health handler rejected: ${message}`)
     }
   }
 

@@ -3,10 +3,11 @@ import deploymentFunc from '../deploy/deploy'
 import hre from 'hardhat'
 import { expect } from 'chai'
 import fs from 'fs'
-import { DeploymentConfiguration, Environment } from '@opengsn/common'
+import { type DeploymentConfiguration, type Environment, EnvironmentsKeys } from '@opengsn/common'
 import { Contract } from 'ethers'
 import { applyDeploymentConfig } from '../src/deployUtils'
 
+// eslint-disable-next-line n/no-path-concat
 const tmpConfigFile = `${__dirname}/tmp-deploy-test-config-${process.pid}.js`
 
 let saveLog: any
@@ -18,6 +19,7 @@ const defaultDeploymentConfiguration: DeploymentConfiguration = {
   paymasterDeposit: '0.1',
   isArbitrum: false,
   deployTestPaymaster: true,
+  deploySingleRecipientPaymaster: false,
   minimumStakePerToken: { test: '0.5' }
 }
 
@@ -34,6 +36,7 @@ function writeTmpDeployConfig (env: DeepPartial<Environment> = {}, deploymentCon
   fs.writeFileSync(tmpConfigFile, `module.exports = ${JSON.stringify({
     1337: {
       ...env,
+      environmentsKey: EnvironmentsKeys.ethereumMainnet,
       deploymentConfiguration
     }
   }, null, 2)}`)

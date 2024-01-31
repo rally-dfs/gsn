@@ -1,31 +1,32 @@
 import BN from 'bn.js'
 import chai from 'chai'
 import { ether, expectEvent, expectRevert } from '@openzeppelin/test-helpers'
+import { StaticJsonRpcProvider } from '@ethersproject/providers'
 
-import { deployHub, evmMine, setNextBlockTimestamp } from './TestUtils'
+import { deployHub, evmMine, hardhatNodeChainId, setNextBlockTimestamp } from './TestUtils'
 
 import chaiAsPromised from 'chai-as-promised'
 import {
-  RelayRequest,
+  type RelayRequest,
   TypedRequestData,
   constants,
   defaultEnvironment,
   getEip712Signature,
-  registerForwarderForGsn,
   splitRelayUrlForRegistrar,
   toNumber
 } from '@opengsn/common/dist'
 import {
-  ForwarderInstance,
-  PenalizerInstance,
-  RelayHubInstance,
-  StakeManagerInstance, TestPaymasterEverythingAcceptedInstance,
-  TestRecipientInstance, TestTokenInstance
-} from '@opengsn/contracts/types/truffle-contracts'
+  type ForwarderInstance,
+  type PenalizerInstance,
+  type RelayHubInstance,
+  type RelayRegistrarInstance,
+  type StakeManagerInstance, type TestPaymasterEverythingAcceptedInstance,
+  type TestRecipientInstance, type TestTokenInstance
+} from '../types/truffle-contracts'
 
-import { RelayRegistrarInstance } from '@opengsn/contracts'
 import { cleanValue } from './utils/chaiHelper'
 import { defaultGsnConfig } from '@opengsn/provider'
+import { registerForwarderForGsn } from '@opengsn/cli/dist/ForwarderUtil'
 
 const { assert } = chai.use(chaiAsPromised)
 
@@ -41,7 +42,7 @@ contract('RelayHub Configuration',
   function ([relayHubDeployer, relayOwner, relayManager, relayWorker, senderAddress, other, dest, incorrectOwner]) { // eslint-disable-line no-unused-vars
     const message = 'Configuration'
     const unstakeDelay = 15000
-    const chainId = defaultEnvironment.chainId
+    const chainId = hardhatNodeChainId
     const gasPrice = new BN(1e9)
     const maxFeePerGas = new BN(1e9)
     const maxPriorityFeePerGas = new BN(1e9)
@@ -54,6 +55,10 @@ contract('RelayHub Configuration',
     const maxAcceptanceBudget = 10e6
     const deprecationTimeInSeconds = 100
     const stake = ether('2')
+
+    // @ts-ignore
+    const currentProviderHost = web3.currentProvider.host
+    const ethersProvider = new StaticJsonRpcProvider(currentProviderHost)
 
     let relayHub: RelayHubInstance
     let relayRegistrar: RelayRegistrarInstance
@@ -130,7 +135,7 @@ contract('RelayHub Configuration',
         relayRequest
       )
       signature = await getEip712Signature(
-        web3,
+        ethersProvider.getSigner(senderAddress),
         dataToSign
       )
 

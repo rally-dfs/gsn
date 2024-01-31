@@ -18,12 +18,14 @@ module.exports = {
     ],
   // This is needed to add configuration to rules with type information
   parser: '@typescript-eslint/parser',
+  plugins: ["@typescript-eslint"],
   parserOptions: {
     // The 'tsconfig.packages.json' is needed to add not-compiled files to the project
     project: ['./tsconfig.json', './tsconfig.packages.json']
   },
   ignorePatterns: [
     '**/types/truffle-contracts',
+    '**/types/ethers-contracts',
     'dist/'
   ],
   rules: {
@@ -51,6 +53,7 @@ module.exports = {
       // otherwise it will raise an error in every JavaScript file
       files: ['*.ts'],
       rules: {
+        '@typescript-eslint/ban-ts-comment': 'off',
         '@typescript-eslint/prefer-ts-expect-error': 'off',
         // allow using '${val}' with numbers, bool and null types
         '@typescript-eslint/restrict-template-expressions': [
@@ -58,8 +61,7 @@ module.exports = {
           {
             allowNumber: true,
             allowBoolean: true,
-            allowNullish: true,
-            allowNullable: true
+            allowNullish: true
           }
         ]
       }

@@ -1,15 +1,19 @@
 import net from 'net'
 import {
-  Address,
+  type Address,
   ContractInteractor,
-  GSNContractsDeployment,
+  type GSNContractsDeployment,
+  type LoggerInterface,
+  RelayCallGasLimitCalculationHelper,
   constants,
   defaultEnvironment,
   ether,
   isSameAddress
 } from '@opengsn/common'
 
-import { CommandsLogic, RegisterOptions } from './CommandsLogic'
+import { StaticJsonRpcProvider } from '@ethersproject/providers'
+
+import { CommandsLogic, type RegisterOptions } from './CommandsLogic'
 import { KeyManager } from '@opengsn/relay/dist/KeyManager'
 
 import { getNetworkUrl, loadDeployment, supportedNetworks } from './utils'
@@ -20,24 +24,42 @@ import { HttpServer } from '@opengsn/relay/dist/HttpServer'
 import { RelayProvider } from '@opengsn/provider/dist/RelayProvider'
 import Web3 from 'web3'
 
-import { configureServer, ServerConfigParams, ServerDependencies } from '@opengsn/relay/dist/ServerConfigParams'
+import {
+  configureServer,
+  type ServerConfigParams,
+  serverDefaultConfiguration,
+  type ServerDependencies
+} from '@opengsn/relay/dist/ServerConfigParams'
 import { createServerLogger } from '@opengsn/logger/dist/ServerWinstonLogger'
 import { TransactionManager } from '@opengsn/relay/dist/TransactionManager'
 import { GasPriceFetcher } from '@opengsn/relay/dist/GasPriceFetcher'
 
-import { GSNConfig } from '@opengsn/provider/dist/GSNConfigurator'
-import { GSNUnresolvedConstructorInput } from '@opengsn/provider/dist/RelayClient'
+import { type GSNConfig } from '@opengsn/provider/dist/GSNConfigurator'
+import { type GSNUnresolvedConstructorInput } from '@opengsn/provider/dist/RelayClient'
 import { ReputationStoreManager } from '@opengsn/relay/dist/ReputationStoreManager'
 import { ReputationManager } from '@opengsn/relay/dist/ReputationManager'
 
-import { ChildProcess } from 'child_process'
+import { Web3MethodsBuilder } from '@opengsn/relay/dist/Web3MethodsBuilder'
+import { createCommandsLogger } from '@opengsn/logger/dist/CommandsWinstonLogger'
 
-export interface TestEnvironment {
-  contractsDeployment: GSNContractsDeployment
-  relayProvider: RelayProvider
-  httpServer: HttpServer
-  relayUrl: string
-  hardhatNode?: ChildProcess
+const TEST_WORKER_SEED = '0xa73df6054db4a383ed237a4dfa15527c07dcdd54950461db39e6457bb7d405a58b5cdce7a9d772a0a51b4768b4fa4982a38c60b7f9090caa1eea4aa734d0c29e'
+const TEST_MANAGER_SEED = '0x61f9525ba0929dc6cfcb5660192a420d1ddf470d0462be4bfab540588f089a6ab3ae309e08b0c3e2af89d51531691fb48409ec3ca0afe976a483cde4f2584501'
+
+export class TestEnvironment {
+  constructor (
+    readonly contractsDeployment: GSNContractsDeployment,
+    readonly relayProvider: RelayProvider,
+    readonly httpServer: HttpServer,
+    readonly relayUrl: string
+  ) {}
+
+  get workerAddress (): string | undefined {
+    return this.httpServer.relayService?.workerAddress
+  }
+
+  get managerAddress (): string | undefined {
+    return this.httpServer.relayService?.managerAddress
+  }
 }
 
 class GsnTestEnvironmentClass {
@@ -46,15 +68,16 @@ class GsnTestEnvironmentClass {
   /**
    *
    * @param host:
+   * @param logger
    * @return
    */
-  async deployGsn (host: string): Promise<GSNContractsDeployment> {
+  async deployGsn (host: string, logger?: LoggerInterface): Promise<GSNContractsDeployment> {
     const _host: string = getNetworkUrl(host)
     if (_host == null) {
       // eslint-disable-next-line @typescript-eslint/restrict-template-expressions
       throw new Error(`startGsn: expected network (${supportedNetworks().join('|')}) or url`)
     }
-    const logger = createServerLogger('error', '', '')
+    logger = logger ?? createServerLogger('error', '', '')
     const commandsLogic = new CommandsLogic(_host, logger, {})
     await commandsLogic.init()
     const from = await commandsLogic.findWealthyAccount()
@@ -71,37 +94,53 @@ class GsnTestEnvironmentClass {
       penalizerConfiguration: defaultEnvironment.penalizerConfiguration,
       relayHubConfiguration: defaultEnvironment.relayHubConfiguration
     })
-    console.log('Deployed GSN', JSON.stringify(deploymentResult))
+    logger?.info(`Deployed GSN\n${JSON.stringify(deploymentResult)}`)
 
     if (deploymentResult.paymasterAddress != null) {
       const balance = await commandsLogic.fundPaymaster(from, deploymentResult.paymasterAddress, ether('1'))
-      console.log('Naive Paymaster successfully funded, balance:', Web3.utils.fromWei(balance))
+      logger?.info(`Naive Paymaster successfully funded, balance: ${Web3.utils.fromWei(balance.toString())}`)
     }
 
     return deploymentResult
   }
 
   /**
-   *
-   * @param host:
+   * Deploy a *new* instance of GSN contracts and start an in-process Relay Server
+   * @param host - the Ethereum RPC node URL
+   * @param localRelayUrl - the local GSN RelayServer URL for RelayRegistrar
+   * @param port - the port for the RelayServer to listen to (optional)
+   * @param logger
+   * @param deterministic - whether to use same addresses for Relay Server accounts (Worker and Manager) after restarts
+   * @param relayServerParamsOverride - allows the tests to override default test server params - for advanced users
    * @return
    */
-  async startGsn (host: string): Promise<TestEnvironment> {
+  async startGsn (
+    host: string,
+    localRelayUrl: string = 'http://127.0.0.1/',
+    port?: number,
+    logger?: LoggerInterface,
+    deterministic: boolean = true,
+    relayServerParamsOverride: Partial<ServerConfigParams> = {}
+  ): Promise<TestEnvironment> {
     await this.stopGsn()
     const _host: string = getNetworkUrl(host)
     if (_host == null) {
       // eslint-disable-next-line @typescript-eslint/restrict-template-expressions
       throw new Error(`startGsn: expected network (${supportedNetworks().join('|')}) or url`)
     }
-    const deploymentResult = await this.deployGsn(host)
-    const logger = createServerLogger('error', '', '')
+    logger = logger ?? createCommandsLogger('silent')
+    const deploymentResult = await this.deployGsn(host, logger)
     const commandsLogic = new CommandsLogic(_host, logger, {})
     await commandsLogic.init()
     const from = await commandsLogic.findWealthyAccount()
 
-    const port = await this._resolveAvailablePort()
-    const relayUrl = 'http://127.0.0.1:' + port.toString()
-    await this._runServer(_host, deploymentResult, from, relayUrl, port)
+    port = port ?? await this._resolveAvailablePort()
+    const url = new URL(localRelayUrl)
+    url.port = port.toString()
+    const relayUrl = url.toString()
+    await this._runServer(
+      _host, deploymentResult, from, relayUrl, port, logger, deterministic, relayServerParamsOverride
+    )
     if (this.httpServer == null) {
       throw new Error('Failed to run a local Relay Server')
     }
@@ -114,13 +153,13 @@ class GsnTestEnvironmentClass {
       sleepCount: 5,
       stake: '1',
       funds: ether('5'),
-      relayUrl: relayUrl,
+      relayUrl,
       gasPrice: 1e9.toString(),
       unstakeDelay: '15000'
     }
     const registrationResult = await commandsLogic.registerRelay(registerOptions)
     if (registrationResult.success) {
-      console.log('In-process relay successfully registered:', JSON.stringify(registrationResult))
+      logger?.info(`In-process relay successfully registered: ${JSON.stringify(registrationResult)}`)
     } else {
       // eslint-disable-next-line @typescript-eslint/restrict-template-expressions
       throw new Error(`Failed to fund relay: ${registrationResult.error} : ${registrationResult?.transactions?.toString()}`)
@@ -132,19 +171,20 @@ class GsnTestEnvironmentClass {
       preferredRelays: [relayUrl],
       paymasterAddress: deploymentResult.paymasterAddress
     }
-    const provider = new Web3.providers.HttpProvider(_host)
+    const provider = new StaticJsonRpcProvider(_host)
     const input: GSNUnresolvedConstructorInput = {
+      overrideDependencies: { logger },
       provider,
       config
     }
-    const relayProvider = await RelayProvider.newProvider(input).init()
-    console.error('== startGSN: ready.')
-    return {
-      contractsDeployment: deploymentResult,
+    const relayProvider = await RelayProvider.newWeb3Provider(input)
+    logger.error('== startGSN: ready.')
+    return new TestEnvironment(
+      deploymentResult,
       relayProvider,
-      relayUrl,
-      httpServer: this.httpServer
-    }
+      this.httpServer,
+      relayUrl
+    )
   }
 
   /**
@@ -181,27 +221,44 @@ class GsnTestEnvironmentClass {
     deploymentResult: GSNContractsDeployment,
     from: Address,
     relayUrl: string,
-    port: number
+    port: number,
+    logger: LoggerInterface,
+    deterministic: boolean,
+    relayServerParamsOverride: Partial<ServerConfigParams>
   ): Promise<void> {
     if (this.httpServer !== undefined) {
       return
     }
-
-    const logger = createServerLogger('error', '', '')
-    const managerKeyManager = new KeyManager(1)
-    const workersKeyManager = new KeyManager(1)
+    let seeds: [string | undefined, string | undefined]
+    if (deterministic) {
+      seeds = [TEST_MANAGER_SEED, TEST_WORKER_SEED]
+    } else {
+      seeds = [undefined, undefined]
+    }
+    const managerKeyManager = new KeyManager(1, undefined, seeds[0])
+    const workersKeyManager = new KeyManager(1, undefined, seeds[1])
     const txStoreManager = new TxStoreManager({ inMemory: true }, logger)
     const maxPageSize = Number.MAX_SAFE_INTEGER
     const environment = defaultEnvironment
+    const calldataEstimationSlackFactor = 1
+    const provider = new StaticJsonRpcProvider(host)
+    const signer = provider.getSigner()
     const contractInteractor = new ContractInteractor(
       {
-        provider: new Web3.providers.HttpProvider(host),
+        provider,
+        signer,
         logger,
         maxPageSize,
         environment,
         deployment: deploymentResult
       })
     await contractInteractor.init()
+    const gasLimitCalculator = new RelayCallGasLimitCalculationHelper(
+      logger, contractInteractor, calldataEstimationSlackFactor, serverDefaultConfiguration.maxAcceptanceBudget
+    )
+    const resolvedDeployment = contractInteractor.getDeployment()
+    const httpProvider = new Web3.providers.HttpProvider(host)
+    const web3MethodsBuilder = new Web3MethodsBuilder(new Web3(httpProvider), resolvedDeployment)
     const gasPriceFetcher = new GasPriceFetcher('', '', contractInteractor, logger)
 
     const reputationStoreManager = new ReputationStoreManager({ inMemory: true }, logger)
@@ -210,6 +267,8 @@ class GsnTestEnvironmentClass {
     const relayServerDependencies: ServerDependencies = {
       logger,
       contractInteractor,
+      gasLimitCalculator,
+      web3MethodsBuilder,
       gasPriceFetcher,
       txStoreManager,
       managerKeyManager,
@@ -226,7 +285,8 @@ class GsnTestEnvironmentClass {
       refreshStateTimeoutBlocks: 1,
       runPaymasterReputations: true,
       logLevel: 'error',
-      workerTargetBalance: 1e18
+      workerTargetBalance: 1e18.toString(),
+      ...relayServerParamsOverride
     }
     const transactionManager = new TransactionManager(relayServerDependencies, configureServer(relayServerParams))
     const backend = new RelayServer(relayServerParams, transactionManager, relayServerDependencies)
@@ -250,14 +310,18 @@ class GsnTestEnvironmentClass {
     workdir = './build/gsn'
   ): Promise<GSNContractsDeployment> {
     const deployment = loadDeployment(workdir)
+    const provider = new StaticJsonRpcProvider(url)
+    const signer = provider.getSigner()
     const contractInteractor = new ContractInteractor(
       {
-        provider: new Web3.providers.HttpProvider(url),
+        provider,
+        signer,
         logger: console,
         maxPageSize: Number.MAX_SAFE_INTEGER,
         environment: defaultEnvironment,
         deployment
       })
+    await contractInteractor.init()
     await contractInteractor.initDeployment(deployment)
     await contractInteractor._validateERC165InterfacesClient(true)
     await contractInteractor._validateERC165InterfacesRelay()

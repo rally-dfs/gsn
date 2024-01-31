@@ -1,6 +1,6 @@
-import BN from 'bn.js'
+import type BN from 'bn.js'
 
-import { RelayHubInstance, RelayRegistrarInstance, StakeManagerInstance, TestTokenInstance } from '@opengsn/contracts'
+import { type RelayHubInstance, type RelayRegistrarInstance, type StakeManagerInstance, type TestTokenInstance } from '../types/truffle-contracts'
 import { constants, defaultEnvironment, splitRelayUrlForRegistrar } from '@opengsn/common'
 import { ether, expectEvent, expectRevert } from '@openzeppelin/test-helpers'
 
@@ -39,8 +39,10 @@ contract('Abandoned Relay Flow', function ([_, relayManager, relayOwner, relayWo
   }
 
   beforeEach(async function () {
+    const abandonmentDelay = 1000
+    const escheatmentDelay = 500
     testToken = await TestToken.new()
-    stakeManager = await StakeManager.new(defaultEnvironment.maxUnstakeDelay, defaultEnvironment.abandonmentDelay, defaultEnvironment.escheatmentDelay, constants.BURN_ADDRESS, devAddress)
+    stakeManager = await StakeManager.new(defaultEnvironment.maxUnstakeDelay, abandonmentDelay, escheatmentDelay, constants.BURN_ADDRESS, devAddress)
     await mintApproveSetOwnerStake()
     relayHubInstance = await deployHub(
       stakeManager.address, constants.ZERO_ADDRESS, constants.ZERO_ADDRESS, testToken.address, oneEther.toString(),

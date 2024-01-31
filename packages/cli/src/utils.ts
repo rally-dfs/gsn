@@ -1,11 +1,11 @@
 // TODO: allow reading network URLs from 'truffle-config.js'
-import commander, { CommanderStatic } from 'commander'
+import commander, { type CommanderStatic } from 'commander'
 import fs from 'fs'
 import path from 'path'
 
-import { Address, RelayHubConfiguration, GSNContractsDeployment } from '@opengsn/common'
+import { type Address, type RelayHubConfiguration, type GSNContractsDeployment, type LoggerInterface } from '@opengsn/common'
 
-import { ServerConfigParams } from '@opengsn/relay/dist/ServerConfigParams'
+import { type ServerConfigParams } from '@opengsn/relay/dist/ServerConfigParams'
 
 const cliInfuraId = '$INFURA_ID'
 export const networks = new Map<string, string>([
@@ -35,7 +35,7 @@ export function supportedNetworks (): string[] {
   return Array.from(networks.keys())
 }
 
-export function getNetworkUrl (network: string, env: { [key: string]: string | undefined } = process.env): string {
+export function getNetworkUrl (network: string, env: Record<string, string | undefined> = process.env): string {
   const net = networks.get(network)
   if (net == null) {
     const match = network.match(/^(https?:\/\/.*)/) ?? []
@@ -127,11 +127,16 @@ export function saveDeployment (deploymentResult: GSNContractsDeployment, workdi
   saveContractToFile(deploymentResult.managerStakeTokenAddress, workdir, 'ManagerStakeTokenAddress.json')
 }
 
-export function showDeployment (deploymentResult: GSNContractsDeployment, title: string | undefined, paymasterTitle: string | undefined = undefined): void {
+export function showDeployment (
+  deploymentResult: GSNContractsDeployment,
+  title: string | undefined,
+  logger: LoggerInterface,
+  paymasterTitle: string | undefined = undefined
+): void {
   if (title != null) {
-    console.log(title)
+    logger.error(title)
   }
-  console.log(`
+  logger.error(`
   RelayHub: ${deploymentResult.relayHubAddress}
   RelayRegistrar: ${deploymentResult.relayRegistrarAddress}
   StakeManager: ${deploymentResult.stakeManagerAddress}
@@ -185,6 +190,6 @@ export function gsnCommander (options: GsnOption[]): CommanderStatic {
         break
     }
   })
-  commander.option('--loglevel <string>', 'error | warn | info | debug', 'debug')
+  commander.option('--loglevel <string>', 'silent | error | warn | info | debug', 'debug')
   return commander
 }

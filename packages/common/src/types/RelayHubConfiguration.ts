@@ -1,3 +1,5 @@
+import type BN from 'bn.js'
+
 export interface RelayHubConfiguration {
   maxWorkerCount: number | BN
   gasReserve: number | BN

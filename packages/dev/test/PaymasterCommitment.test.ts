@@ -1,34 +1,34 @@
 /* eslint-disable no-global-assign */
 
 import BN from 'bn.js'
-import { HttpProvider } from 'web3-core'
+import { StaticJsonRpcProvider } from '@ethersproject/providers'
 import { ether, expectEvent, expectRevert } from '@openzeppelin/test-helpers'
-import { toBuffer, PrefixedHexString } from 'ethereumjs-util'
+import { toBuffer, type PrefixedHexString } from 'ethereumjs-util'
 
 import {
   ContractInteractor,
-  ForwardRequest,
-  GSNContractsDeployment,
-  RelayData,
-  RelayRequest,
+  type ForwardRequest,
+  type GSNContractsDeployment,
+  type RelayData,
+  type RelayRequest,
   TypedRequestData,
   constants,
   defaultEnvironment,
   getEip712Signature,
-  registerForwarderForGsn,
   splitRelayUrlForRegistrar
 } from '@opengsn/common'
 
 import {
-  RelayHubInstance,
-  PenalizerInstance,
-  StakeManagerInstance,
-  TestRecipientInstance,
-  ForwarderInstance,
-  TestPaymasterConfigurableMisbehaviorInstance, RelayRegistrarInstance, TestTokenInstance
-} from '@opengsn/contracts/types/truffle-contracts'
+  type RelayHubInstance,
+  type PenalizerInstance,
+  type StakeManagerInstance,
+  type TestRecipientInstance,
+  type ForwarderInstance,
+  type TestPaymasterConfigurableMisbehaviorInstance, type RelayRegistrarInstance, type TestTokenInstance
+} from '../types/truffle-contracts'
 
 import { createServerLogger } from '@opengsn/logger/dist/ServerWinstonLogger'
+import { registerForwarderForGsn } from '@opengsn/cli/dist/ForwarderUtil'
 
 import { deployHub, encodeRevertReason } from './TestUtils'
 import { defaultGsnConfig } from '@opengsn/provider'
@@ -73,22 +73,27 @@ async function makeRequest (
   const deployment: GSNContractsDeployment = {
     relayHubAddress: relayHubInstance.address
   }
+  // @ts-ignore
+  const currentProviderHost = web3.currentProvider.host
+  const provider = new StaticJsonRpcProvider(currentProviderHost)
   const contractInteractor = new ContractInteractor({
     domainSeparatorName: defaultGsnConfig.domainSeparatorName,
     environment: defaultEnvironment,
-    provider: web3.eth.currentProvider as HttpProvider,
+    provider,
+    signer: provider.getSigner(),
     logger: createServerLogger('error', '', ''),
     deployment,
     maxPageSize: Number.MAX_SAFE_INTEGER
   })
+  await contractInteractor.init()
   filledRequest.relayData.transactionCalldataGasUsed =
-    contractInteractor.estimateCalldataCostForRequest(filledRequest, {
+    await contractInteractor.estimateCalldataCostForRequest(filledRequest, {
       maxApprovalDataLength: 0,
       maxPaymasterDataLength: 0
     })
 
   const sig = await getEip712Signature(
-    web3,
+    provider.getSigner(filledRequest.request.from),
     new TypedRequestData(
       defaultGsnConfig.domainSeparatorName,
       chainId,

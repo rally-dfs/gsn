@@ -10,7 +10,7 @@ import {
 } from '../utils'
 import { toHex, toWei } from 'web3-utils'
 import { createCommandsLogger } from '@opengsn/logger/dist/CommandsWinstonLogger'
-import { Environment, environments, EnvironmentsKeys } from '@opengsn/common'
+import { type Environment, environments, EnvironmentsKeys } from '@opengsn/common'
 
 gsnCommander(['n', 'f', 'm', 'g', 'l'])
   .option('-w, --workdir <directory>', 'relative work directory (defaults to build/gsn/)', 'build/gsn')
@@ -44,9 +44,10 @@ gsnCommander(['n', 'f', 'm', 'g', 'l'])
   const relayHubConfiguration = getRelayHubConfiguration(commander.config) ?? environment.relayHubConfiguration
   const penalizerConfiguration = environment.penalizerConfiguration
   const logic = new CommandsLogic(nodeURL, logger, {}, mnemonic, commander.derivationPath, commander.derivationIndex, commander.privateKeyHex)
+  await logic.init()
   const from = commander.from ?? await logic.findWealthyAccount()
 
-  const gasPrice = toHex(commander.gasPrice != null ? toWei(commander.gasPrice, 'gwei').toString() : await logic.getGasPrice())
+  const gasPrice = toHex(commander.gasPrice != null ? toWei(commander.gasPrice, 'gwei').toString() : (await logic.getGasPrice()).toString())
   const gasLimit = commander.gasLimit
 
   if (commander.testToken === (commander.stakingToken != null)) {
@@ -75,7 +76,7 @@ gsnCommander(['n', 'f', 'm', 'g', 'l'])
   })
   const paymasterName = 'Default'
 
-  showDeployment(deploymentResult, `Deployed GSN to network: ${network}`, paymasterName)
+  showDeployment(deploymentResult, `Deployed GSN to network: ${network}`, console, paymasterName)
   saveDeployment(deploymentResult, commander.workdir)
   process.exit(0)
 })().catch(

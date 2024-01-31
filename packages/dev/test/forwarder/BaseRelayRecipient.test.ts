@@ -1,7 +1,7 @@
 import {
-  ForwarderInstance,
-  TestForwarderTargetInstance
-} from '@opengsn/contracts/types/truffle-contracts'
+  type ForwarderInstance,
+  type TestForwarderTargetInstance
+} from '../../types/truffle-contracts'
 import { toHex } from 'web3-utils'
 
 const TestForwarderTarget = artifacts.require('TestForwarderTarget')

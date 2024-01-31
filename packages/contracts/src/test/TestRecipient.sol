@@ -12,6 +12,17 @@ contract TestRecipient is ERC2771Recipient {
         _setTrustedForwarder(forwarder);
     }
 
+    // testing inner call gas estimation
+    uint256 private nothing1;
+    uint256 private nothing2;
+    uint256 private nothing3;
+    // solhint-disable-next-line no-complex-fallback
+    fallback() external payable {
+        nothing1 = type(uint256).max;
+        nothing2 = type(uint256).max;
+        nothing3 = type(uint256).max;
+    }
+
     event Reverting(string message);
 
     function testRevert() public {
@@ -75,4 +86,15 @@ contract TestRecipient is ERC2771Recipient {
         require(!doRevert);
     }
 
+    function withdrawFromSingletonWhitelistPaymaster(address payable singletonPaymaster) public {
+        TestRecipient(singletonPaymaster).withdrawBalance(1);
+    }
+
+    // only here for one method sig
+    // solhint-disable-next-line no-empty-blocks
+    function withdrawBalance(uint256 amount) public {}
+
+    // only here for one method sig
+    // solhint-disable-next-line no-empty-blocks
+    function captureTheFlag() external {}
 }

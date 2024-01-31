@@ -1,31 +1,31 @@
 import sinon from 'sinon'
-import { ChildProcessWithoutNullStreams } from 'child_process'
-import { HttpProvider } from 'web3-core'
+import { type ChildProcessWithoutNullStreams } from 'child_process'
+import { type HttpProvider } from 'web3-core'
 import { ether } from '@openzeppelin/test-helpers'
-
+import { StaticJsonRpcProvider } from '@ethersproject/providers'
 import { KnownRelaysManager, DefaultRelayFilter } from '@opengsn/provider/dist/KnownRelaysManager'
 import {
   ContractInteractor,
-  LoggerInterface,
-  RelayInfoUrl,
-  RegistrarRelayInfo,
+  type LoggerInterface,
+  type RelayInfoUrl,
+  type RegistrarRelayInfo,
   constants,
   defaultEnvironment,
-  registerForwarderForGsn,
   splitRelayUrlForRegistrar
 } from '@opengsn/common'
-import { defaultGsnConfig, GSNConfig } from '@opengsn/provider/dist/GSNConfigurator'
+import { defaultGsnConfig, type GSNConfig } from '@opengsn/provider/dist/GSNConfigurator'
 import {
-  PenalizerInstance,
-  RelayHubInstance,
-  StakeManagerInstance,
-  TestPaymasterConfigurableMisbehaviorInstance,
-  TestRecipientInstance, TestTokenInstance
-} from '@opengsn/contracts/types/truffle-contracts'
+  type PenalizerInstance,
+  type RelayHubInstance,
+  type StakeManagerInstance,
+  type TestPaymasterConfigurableMisbehaviorInstance,
+  type TestRecipientInstance, type TestTokenInstance
+} from '../../types/truffle-contracts'
 import { configureGSN, deployHub, revert, snapshot, startRelay, stopRelay } from '../TestUtils'
 import { prepareTransaction } from './RelayProvider.test'
 
 import { createClientLogger } from '@opengsn/logger/dist/ClientWinstonLogger'
+import { registerForwarderForGsn } from '@opengsn/cli/dist/ForwarderUtil'
 
 const StakeManager = artifacts.require('StakeManager')
 const Penalizer = artifacts.require('Penalizer')
@@ -69,6 +69,9 @@ contract('KnownRelaysManager', function (
     workerNotActive
   ]) {
   const pastEventsQueryMaxPageSize = 10
+  // @ts-ignore
+  const currentProviderHost = web3.currentProvider.host
+  const ethersProvider = new StaticJsonRpcProvider(currentProviderHost)
 
   describe('#_fetchRecentlyActiveRelayManagers()', function () {
     let config: GSNConfig
@@ -95,7 +98,8 @@ contract('KnownRelaysManager', function (
       const maxPageSize = Number.MAX_SAFE_INTEGER
       contractInteractor = new ContractInteractor({
         environment: defaultEnvironment,
-        provider: web3.currentProvider as HttpProvider,
+        provider: ethersProvider,
+        signer: ethersProvider.getSigner(),
         maxPageSize,
         logger,
         deployment: { relayHubAddress: relayHub.address }
@@ -259,12 +263,17 @@ contract('KnownRelaysManager 2', function (accounts) {
   let contractInteractor: ContractInteractor
   let logger: LoggerInterface
 
+  // @ts-ignore
+  const currentProviderHost = web3.currentProvider.host
+  const ethersProvider = new StaticJsonRpcProvider(currentProviderHost)
+
   before(async function () {
     logger = createClientLogger({ logLevel: 'error' })
     const maxPageSize = Number.MAX_SAFE_INTEGER
     contractInteractor = new ContractInteractor({
       environment: defaultEnvironment,
-      provider: web3.currentProvider as HttpProvider,
+      provider: ethersProvider,
+      signer: ethersProvider.getSigner(),
       maxPageSize,
       logger
     })
@@ -295,7 +304,6 @@ contract('KnownRelaysManager 2', function (accounts) {
       await testToken.approve(stakeManager.address, ether('1'), { from: accounts[1] })
       relayProcess = await startRelay(relayHub.address, testToken, stakeManager, {
         stake: 1e18.toString(),
-        url: 'asd',
         dbPruneTxAfterBlocks: 1,
         relayOwner: accounts[1],
         relaylog: process.env.relaylog,
@@ -304,7 +312,8 @@ contract('KnownRelaysManager 2', function (accounts) {
       const maxPageSize = Number.MAX_SAFE_INTEGER
       contractInteractor = new ContractInteractor({
         environment: defaultEnvironment,
-        provider: web3.currentProvider as HttpProvider,
+        provider: ethersProvider,
+        signer: ethersProvider.getSigner(),
         logger,
         maxPageSize,
         deployment
@@ -325,7 +334,7 @@ contract('KnownRelaysManager 2', function (accounts) {
     })
 
     after(async function () {
-      await stopRelay(relayProcess)
+      stopRelay(relayProcess)
     })
 
     it('should consider all relay managers with stake and authorization as active', async function () {

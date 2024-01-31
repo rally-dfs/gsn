@@ -2,39 +2,40 @@
 // This rule seems to be flickering and buggy - does not understand async arrow functions correctly
 import { ether, expectEvent, expectRevert } from '@openzeppelin/test-helpers'
 import BN from 'bn.js'
+import { StaticJsonRpcProvider } from '@ethersproject/providers'
 
 import { Transaction, AccessListEIP2930Transaction, FeeMarketEIP1559Transaction } from '@ethereumjs/tx'
 import Common from '@ethereumjs/common'
-import { TxOptions } from '@ethereumjs/tx/dist/types'
+import { type TxOptions } from '@ethereumjs/tx/dist/types'
 import { encode, utils } from 'rlp'
 import { expect } from 'chai'
 import { privateToAddress, bnToRlp, ecsign, keccak256, bufferToHex } from 'ethereumjs-util'
 
 import {
-  RelayRequest,
+  type RelayRequest,
   StakeUnlocked,
   TypedRequestData,
   constants,
   defaultEnvironment,
-  getDataAndSignature,
   getEip712Signature,
   getRawTxOptions,
-  registerForwarderForGsn,
   removeHexPrefix,
   signatureRSV2Hex
 } from '@opengsn/common'
 
 import {
-  PenalizerInstance,
-  RelayHubInstance, StakeManagerInstance,
-  TestPaymasterEverythingAcceptedInstance,
-  TestRecipientInstance, TestTokenInstance
-} from '@opengsn/contracts/types/truffle-contracts'
+  type PenalizerInstance,
+  type RelayHubInstance, type StakeManagerInstance,
+  type TestPaymasterEverythingAcceptedInstance,
+  type TestRecipientInstance, type TestTokenInstance
+} from '../types/truffle-contracts'
 
-import { deployHub, evmMineMany, revert, snapshot } from './TestUtils'
+import { deployHub, evmMineMany, hardhatNodeChainId, revert, snapshot } from './TestUtils'
 
 import { balanceTrackerErc20 } from './utils/ERC20BalanceTracker'
 import { defaultGsnConfig } from '@opengsn/provider'
+import { registerForwarderForGsn } from '@opengsn/cli/dist/ForwarderUtil'
+import { getDataAndSignature } from '@opengsn/relay/dist/penalizer/PenalizerUtils'
 
 const RelayHub = artifacts.require('RelayHub')
 const StakeManager = artifacts.require('StakeManager')
@@ -50,7 +51,7 @@ const clientId = '0'
 
 contract('RelayHub Penalizations', function ([_, relayOwner, committer, nonCommitter,
   sender, other, relayManager, reporterRelayManager]) { // eslint-disable-line no-unused-vars
-  const chainId = defaultEnvironment.chainId
+  const chainId = hardhatNodeChainId
 
   let stakeManager: StakeManagerInstance
   let relayHub: RelayHubInstance
@@ -66,6 +67,10 @@ contract('RelayHub Penalizations', function ([_, relayOwner, committer, nonCommi
   const anotherRelayWorkerPrivateKey = Buffer.from('4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356', 'hex')
   const anotherRelayWorker = privateToAddress(anotherRelayWorkerPrivateKey).toString('hex')
   const stake = ether('1')
+
+  // @ts-ignore
+  const currentProviderHost = web3.currentProvider.host
+  const ethersProvider = new StaticJsonRpcProvider(currentProviderHost)
 
   const encodedCallArgs = {
     sender,
@@ -154,7 +159,7 @@ contract('RelayHub Penalizations', function ([_, relayOwner, committer, nonCommi
               maxFeePerGas: encodedCallArgs.maxFeePerGas.toString(),
               maxPriorityFeePerGas: encodedCallArgs.maxPriorityFeePerGas.toString(),
               transactionCalldataGasUsed: '0',
-              relayWorker: relayWorker,
+              relayWorker,
               forwarder,
               paymaster: encodedCallArgs.paymaster,
               paymasterData,
@@ -267,7 +272,7 @@ contract('RelayHub Penalizations', function ([_, relayOwner, committer, nonCommi
           await evmMineMany(10)
           const res = await penalizer.penalizeIllegalTransaction(bufferToHex(bufferToSign), penalizableTxSignature, relayHub.address, randomValue, { from: committer })
           expectEvent(res, 'StakePenalized', {
-            relayManager: relayManager,
+            relayManager,
             beneficiary: committer,
             reward: stake.divn(2)
           })
@@ -634,7 +639,7 @@ contract('RelayHub Penalizations', function ([_, relayOwner, committer, nonCommi
             relayRequest
           )
           const signature = await getEip712Signature(
-            web3,
+            ethersProvider.getSigner(),
             dataToSign
           )
           await relayHub.depositFor(paymaster.address, {

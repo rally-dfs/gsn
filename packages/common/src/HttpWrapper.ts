@@ -1,4 +1,4 @@
-import axios, { AxiosInstance, AxiosRequestConfig } from 'axios'
+import axios, { type AxiosInstance, type AxiosRequestConfig } from 'axios'
 
 const LOGMAXLEN = 120
 const DEFAULT_TIMEOUT = 15000
@@ -28,13 +28,13 @@ export class HttpWrapper {
     }
   }
 
-  async sendPromise (url: string, jsonRequestData?: any): Promise<any> {
+  async sendPromise (url: URL, jsonRequestData?: any): Promise<any> {
     if (this.logreq) {
       console.log('sending request:', url, JSON.stringify(jsonRequestData ?? {}).slice(0, LOGMAXLEN))
     }
 
     const response = await this.provider.request({
-      url,
+      url: url.toString(),
       method: jsonRequestData != null ? 'POST' : 'GET',
       data: jsonRequestData
     })

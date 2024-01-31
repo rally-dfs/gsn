@@ -1,7 +1,8 @@
-import { RelayServer } from '@opengsn/relay/dist/RelayServer'
+import { StaticJsonRpcProvider, type JsonRpcProvider } from '@ethersproject/providers'
+import { type RelayServer } from '@opengsn/relay/dist/RelayServer'
 import { evmMine, evmMineMany } from './TestUtils'
-import { ContractInteractor, LoggerInterface, GSNContractsDeployment, defaultEnvironment } from '@opengsn/common'
-import { HttpProvider } from 'web3-core'
+import { ContractInteractor, type LoggerInterface, type GSNContractsDeployment, defaultEnvironment } from '@opengsn/common'
+import { type HttpProvider } from 'web3-core'
 import { ProfilingProvider } from '@opengsn/common/dist/dev/ProfilingProvider'
 import { ServerTestEnvironment } from './ServerTestEnvironment'
 import { createServerLogger } from '@opengsn/logger/dist/ServerWinstonLogger'
@@ -10,8 +11,9 @@ contract('RelayServerRequestsProfiling', function (accounts) {
   const refreshStateTimeoutBlocks = 2
   const callsPerStateRefresh = 13
   const callsPerBlock = 0
-  const callsPerTransaction = 10
+  const callsPerTransaction = 9
 
+  let ethersProvider: JsonRpcProvider
   let provider: ProfilingProvider
   let relayServer: RelayServer
   let env: ServerTestEnvironment
@@ -19,11 +21,21 @@ contract('RelayServerRequestsProfiling', function (accounts) {
 
   before(async function () {
     logger = createServerLogger('error', '', '')
-    provider = new ProfilingProvider(web3.currentProvider as HttpProvider)
+    // @ts-ignore
+    const currentProviderHost = web3.currentProvider.host
+    ethersProvider = new StaticJsonRpcProvider(currentProviderHost)
+    provider = new ProfilingProvider(currentProviderHost, true)
+    const [account] = await provider.listAccounts()
+    const signer = provider.getSigner(account)
     const contractFactory = async function (deployment: GSNContractsDeployment): Promise<ContractInteractor> {
       const maxPageSize = Number.MAX_SAFE_INTEGER
       const contractInteractor = new ContractInteractor({
-        environment: defaultEnvironment, maxPageSize, provider, logger, deployment
+        environment: defaultEnvironment,
+        maxPageSize,
+        provider,
+        signer,
+        logger,
+        deployment
       })
       await contractInteractor.init()
       return contractInteractor
@@ -32,7 +44,7 @@ contract('RelayServerRequestsProfiling', function (accounts) {
     await env.init({}, {}, contractFactory)
     await env.newServerInstance({ refreshStateTimeoutBlocks })
     relayServer = env.relayServer
-    const latestBlock = await web3.eth.getBlock('latest')
+    const latestBlock = await ethersProvider.getBlock('latest')
     await relayServer._worker(latestBlock)
   })
 
@@ -42,7 +54,7 @@ contract('RelayServerRequestsProfiling', function (accounts) {
 
   it('should make X requests per block callback when state must be refreshed', async function () {
     await evmMineMany(5)
-    const latestBlock = await web3.eth.getBlock('latest')
+    const latestBlock = await ethersProvider.getBlock('latest')
     assert.isTrue(relayServer._shouldRefreshState(latestBlock))
     const receipts = await relayServer._worker(latestBlock)
     assert.equal(receipts.length, 0)
@@ -52,7 +64,7 @@ contract('RelayServerRequestsProfiling', function (accounts) {
 
   it('should make X requests per block callback when nothing needs to be done', async function () {
     await evmMine()
-    const latestBlock = await web3.eth.getBlock('latest')
+    const latestBlock = await ethersProvider.getBlock('latest')
     assert.isFalse(relayServer._shouldRefreshState(latestBlock))
     const receipts = await relayServer._worker(latestBlock)
     assert.equal(receipts.length, 0)

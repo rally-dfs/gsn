@@ -1,21 +1,24 @@
 import * as bip39 from 'ethereum-cryptography/bip39'
+
+import Web3 from 'web3'
 import commander from 'commander'
 import fs from 'fs'
-import Web3 from 'web3'
+import { type PrefixedHexString } from 'ethereumjs-util'
+import { StaticJsonRpcProvider } from '@ethersproject/providers'
 import { hdkey as EthereumHDKey } from 'ethereumjs-wallet'
 import { toHex, toWei } from 'web3-utils'
+import { type HttpProvider } from 'web3-core'
 
 import {
-  LoggerInterface
-  , Address, Web3ProviderBaseInterface
+  type Address,
+  type LoggerInterface
 } from '@opengsn/common'
 
-import { GSNConfig, GSNDependencies, GSNUnresolvedConstructorInput, RelayProvider } from '@opengsn/provider'
+import { type GSNConfig, type GSNDependencies, type GSNUnresolvedConstructorInput, RelayProvider } from '@opengsn/provider'
+import { createCommandsLogger } from '@opengsn/logger/dist/CommandsWinstonLogger'
 
 import { getMnemonic, getNetworkUrl, gsnCommander } from '../utils'
 import { CommandsLogic } from '../CommandsLogic'
-import { createCommandsLogger } from '@opengsn/logger/dist/CommandsWinstonLogger'
-import { PrefixedHexString } from 'ethereumjs-util'
 
 function commaSeparatedList (value: string, _dummyPrevious: string[]): string[] {
   return value.split(',')
@@ -36,15 +39,11 @@ async function getProvider (
   paymaster: Address,
   mnemonic: string | undefined,
   logger: LoggerInterface,
-  host: string): Promise<{ provider: Web3ProviderBaseInterface, from: Address }> {
+  host: string): Promise<{ provider: HttpProvider, from: Address }> {
   const config: Partial<GSNConfig> = {
     clientId: '0',
     paymasterAddress: paymaster
   }
-  const provider = new Web3.providers.HttpProvider(host, {
-    keepAlive: true,
-    timeout: 120000
-  })
   let from: Address
   let privateKey: PrefixedHexString | undefined
   if (commander.from != null) {
@@ -64,6 +63,10 @@ async function getProvider (
     throw new Error('must specify either "--mnemonic" or pass "--from" account')
   }
   if (commander.directCall === true) {
+    const provider = new Web3.providers.HttpProvider(host, {
+      keepAlive: true,
+      timeout: 120000
+    })
     return { provider, from }
   } else {
     if (paymaster == null) {
@@ -72,12 +75,13 @@ async function getProvider (
     const overrideDependencies: Partial<GSNDependencies> = {
       logger
     }
+    const provider = new StaticJsonRpcProvider(host)
     const input: GSNUnresolvedConstructorInput = {
       provider,
       config,
       overrideDependencies
     }
-    const relayProvider = await RelayProvider.newProvider(input).init()
+    const relayProvider = await RelayProvider.newWeb3Provider(input)
     if (privateKey != null) {
       relayProvider.addAccount(privateKey)
     }
@@ -94,6 +98,8 @@ async function getProvider (
   const logger = createCommandsLogger(commander.loglevel)
   const mnemonic = getMnemonic(commander.mnemonic)
   const logic = new CommandsLogic(nodeURL, logger, {}, mnemonic, commander.derivationPath, commander.derivationIndex, commander.privateKeyHex)
+  await logic.init()
+
   const { provider, from } = await getProvider(
     commander.to,
     commander.paymaster,
@@ -128,7 +134,7 @@ async function getProvider (
   }
   const methodParams = commander.methodParams
 
-  const gasPrice = toHex(commander.gasPrice != null ? toWei(commander.gasPrice, 'gwei').toString() : await logic.getGasPrice())
+  const gasPrice = toHex(commander.gasPrice != null ? toWei(commander.gasPrice, 'gwei').toString() : (await logic.getGasPrice()).toString())
   const gas = commander.gasLimit
 
   const receipt = await method(...methodParams).send({

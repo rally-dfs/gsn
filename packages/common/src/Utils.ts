@@ -1,36 +1,29 @@
-import BN from 'bn.js'
-import Web3 from 'web3'
-import abi from 'web3-eth-abi'
+import type BN from 'bn.js'
 import chalk from 'chalk'
-import { AbiItem, fromWei, toWei, toBN } from 'web3-utils'
-import { EventData } from 'web3-eth-contract'
-import { JsonRpcResponse } from 'web3-core-helpers'
-import { TypedMessage } from '@metamask/eth-sig-util'
-import { encode, List } from 'rlp'
+
+import { AbiCoder, Interface, type JsonFragment } from '@ethersproject/abi'
+import { BigNumber } from '@ethersproject/bignumber'
+import { type JsonRpcProvider, type JsonRpcSigner } from '@ethersproject/providers'
+import { type TypedMessage } from '@metamask/eth-sig-util'
 
 import {
-  Capability,
-  FeeMarketEIP1559Transaction,
-  Transaction,
-  TransactionFactory,
-  TxOptions,
-  TypedTransaction
-} from '@ethereumjs/tx'
-import {
-  bnToUnpaddedBuffer,
   bufferToHex,
   ecrecover,
   hashPersonalMessage,
-  PrefixedHexString,
+  type PrefixedHexString,
   pubToAddress,
-  toBuffer,
-  unpadBuffer
+  toBuffer
 } from 'ethereumjs-util'
 
-import { Address } from './types/Aliases'
+import { type Address, type EIP1559Fees, type EventData, type RelaySelectionResult } from './types/Aliases'
 
-import { RelayRequest } from './EIP712/RelayRequest'
-import { MessageTypes } from './EIP712/TypedRequestData'
+import { type MessageTypes } from './EIP712/TypedRequestData'
+import { fromWei, isBigNumber, toHex, toWei } from './web3js/Web3JSUtils'
+import { ethers } from 'ethers'
+import { keccak256 } from 'ethers/lib/utils'
+import { type RelayRequest } from './EIP712/RelayRequest'
+import { type PartialRelayInfo } from './types/RelayInfo'
+import { type LoggerInterface } from './LoggerInterface'
 
 export function removeHexPrefix (hex: string): string {
   if (hex == null || typeof hex.replace !== 'function') {
@@ -55,11 +48,16 @@ export function signatureRSV2Hex (r: BN | Buffer, s: BN | Buffer, v: number): st
 export function event2topic (contract: any, names: string[]): any {
   // for testing: don't crash on mockup..
   // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
-  if (!contract.options || !contract.options.jsonInterface) { return names }
-  return contract.options.jsonInterface
-    .filter((e: any) => names.includes(e.name))
-    // @ts-ignore
-    .map(abi.encodeEventSignature)
+  if (!contract.filters) { return names }
+  return names
+    .map(name => {
+      let topic = contract.filters[name]().topics?.[0]
+      if (topic == null) {
+        // maybe this is Ethers.js v6 contract?
+        topic = contract.filters.TransactionRelayed.fragment.topicHash
+      }
+      return topic
+    })
 }
 
 export function addresses2topics (addresses: string[]): string[] {
@@ -79,17 +77,19 @@ export function errorAsBoolean (err: any): boolean {
 export function decodeRevertReason (revertBytes: PrefixedHexString, throwOnError = false): string | null {
   if (revertBytes == null) { return null }
   if (!revertBytes.startsWith('0x08c379a0')) {
+    if (revertBytes.includes('without a reason string') || revertBytes.includes('FWD: insufficient gas')) {
+      revertBytes = `Check Relay Worker balance - potentially Out Of Gas (${revertBytes})`
+    }
     if (throwOnError) {
       throw new Error('invalid revert bytes: ' + revertBytes)
     }
     return revertBytes
   }
-  // @ts-ignore
-  return abi.decodeParameter('string', '0x' + revertBytes.slice(10)) as any
+  return new AbiCoder().decode(['string'], '0x' + revertBytes.slice(10))[0]
 }
 
-export async function getDefaultMethodSuffix (web3: Web3): Promise<string> {
-  const nodeInfo = await web3.eth.getNodeInfo()
+export async function getDefaultMethodSuffix (provider: JsonRpcProvider): Promise<string> {
+  const nodeInfo: string = await provider.send('web3_clientVersion', [])
   // ganache-cli
   if (nodeInfo.toLowerCase().includes('testrpc')) return ''
   // hardhat
@@ -98,50 +98,24 @@ export async function getDefaultMethodSuffix (web3: Web3): Promise<string> {
   return '_v4'
 }
 
-export async function getEip712Signature<T extends MessageTypes> (
-  web3: Web3,
-  typedRequestData: TypedMessage<T>,
-  methodSuffix: string | null = null,
-  jsonStringifyRequest = false
-): Promise<PrefixedHexString> {
-  const senderAddress = typedRequestData.message.from
-  let dataToSign: TypedMessage<T> | string
-  if (jsonStringifyRequest) {
-    dataToSign = JSON.stringify(typedRequestData)
-  } else {
-    dataToSign = typedRequestData
-  }
-  methodSuffix = methodSuffix ?? await getDefaultMethodSuffix(web3)
-  return await new Promise((resolve, reject) => {
-    let method
-    // @ts-ignore (the entire web3 typing is fucked up)
-    if (typeof web3.currentProvider.sendAsync === 'function') {
-      // @ts-ignore
-      method = web3.currentProvider.sendAsync
-    } else {
-      // @ts-ignore
-      method = web3.currentProvider.send
-    }
-    const paramBlock = {
-      method: `eth_signTypedData${methodSuffix}`,
-      params: [senderAddress, dataToSign],
-      jsonrpc: '2.0',
-      id: Date.now()
-    }
-    method.bind(web3.currentProvider)(paramBlock, (error: Error | string | null | boolean, result?: JsonRpcResponse) => {
-      if (result?.error != null) {
-        error = result.error as any
-      }
-      if ((errorAsBoolean(error)) || result == null) {
-        reject((error as any).message ?? error)
-      } else {
-        resolve(correctV(result.result))
-      }
-    })
-  })
+/* eslint-disable no-extend-native */
+// @ts-expect-error 🚧 ETHERS 6.1.0 IS BROKEN. THIS IS A WORKAROUND. FIXED IN 6.3.0 but 6.3.0 breaks CommonJS interop
+BigInt.prototype.toJSON = function () {
+  return this.toString()
 }
 
-function correctV (result: PrefixedHexString): PrefixedHexString {
+export async function getEip712Signature<T extends MessageTypes> (
+  signer: JsonRpcSigner,
+  typedRequestData: TypedMessage<T>
+): Promise<PrefixedHexString> {
+  const dataToSign = JSON.parse(JSON.stringify(typedRequestData))
+  delete dataToSign.types.EIP712Domain
+  // ethers v5 vs v6
+  const signFunction = signer._signTypedData?.bind(signer) ?? (signer as any).signTypedData.bind(signer)
+  return await signFunction(dataToSign.domain, dataToSign.types, dataToSign.message)
+}
+
+export function correctV (result: PrefixedHexString): PrefixedHexString {
   const buffer = toBuffer(result)
   const last = buffer.length - 1
   const oldV = buffer[last]
@@ -174,9 +148,9 @@ export function getEcRecoverMeta (message: string, signature: string | Signature
     const s = parseHexString(signature.substr(66, 65))
     const v = parseHexString(signature.substr(130, 2))
     signature = {
-      v: v,
-      r: r,
-      s: s
+      v,
+      r,
+      s
     }
   }
   const bufSigned = hashPersonalMessage(Buffer.from(message))
@@ -200,11 +174,11 @@ export function isSameAddress (address1: Address, address2: Address): boolean {
 }
 
 export async function sleep (ms: number): Promise<void> {
-  return await new Promise(resolve => setTimeout(resolve, ms))
+  await new Promise(resolve => setTimeout(resolve, ms))
 }
 
-export function ether (n: string): BN {
-  return new BN(toWei(n, 'ether'))
+export function ether (n: string): BigNumber {
+  return BigNumber.from(toWei(n, 'ether'))
 }
 
 export function randomInRange (min: number, max: number): number {
@@ -230,13 +204,6 @@ export function getLatestEventData (events: EventData[]): EventData | undefined 
   return eventDataSorted[0]
 }
 
-export interface PaymasterGasAndDataLimits {
-  acceptanceBudget: BN
-  preRelayedCallGasLimit: BN
-  postRelayedCallGasLimit: BN
-  calldataSizeLimit: BN
-}
-
 interface Signature {
   v: number[]
   r: number[]
@@ -245,49 +212,6 @@ interface Signature {
 
 export function boolString (bool: boolean): string {
   return bool ? chalk.green('good'.padEnd(14)) : chalk.red('wrong'.padEnd(14))
-}
-
-export function getDataAndSignature (tx: TypedTransaction, chainId: number): { data: string, signature: string } {
-  if (tx.to == null) {
-    throw new Error('tx.to must be defined')
-  }
-  if (tx.s == null || tx.r == null || tx.v == null) {
-    throw new Error('tx signature must be defined')
-  }
-  const input: List = [bnToUnpaddedBuffer(tx.nonce)]
-  if (!tx.supports(Capability.EIP1559FeeMarket)) {
-    input.push(
-      bnToUnpaddedBuffer((tx as Transaction).gasPrice)
-    )
-  } else {
-    input.push(
-      bnToUnpaddedBuffer((tx as FeeMarketEIP1559Transaction).maxPriorityFeePerGas),
-      bnToUnpaddedBuffer((tx as FeeMarketEIP1559Transaction).maxFeePerGas)
-    )
-  }
-  input.push(
-    bnToUnpaddedBuffer(tx.gasLimit),
-    tx.to.toBuffer(),
-    bnToUnpaddedBuffer(tx.value),
-    tx.data,
-    toBuffer(chainId),
-    unpadBuffer(toBuffer(0)),
-    unpadBuffer(toBuffer(0))
-  )
-  let vInt = tx.v.toNumber()
-  if (vInt > 28) {
-    vInt -= chainId * 2 + 8
-  }
-  const data = `0x${encode(input).toString('hex')}`
-  const signature = signatureRSV2Hex(tx.r, tx.s, vInt)
-  return {
-    data,
-    signature
-  }
-}
-
-export function signedTransactionToHash (signedTransaction: PrefixedHexString, transactionOptions: TxOptions): PrefixedHexString {
-  return bufferToHex(TransactionFactory.fromSerializedData(toBuffer(signedTransaction), transactionOptions).hash())
 }
 
 /**
@@ -306,7 +230,7 @@ export function removeNullValues<T> (obj: T, recursive = false): Partial<T> {
       delete c[k]
     } else if (recursive) {
       let val = c[k]
-      if (typeof val === 'object' && !Array.isArray(val) && !BN.isBN(val)) {
+      if (typeof val === 'object' && !Array.isArray(val) && !BigNumber.isBigNumber(val)) {
         val = removeNullValues(val, recursive)
       }
       c[k] = val
@@ -316,23 +240,26 @@ export function removeNullValues<T> (obj: T, recursive = false): Partial<T> {
 }
 
 export function formatTokenAmount (
-  balance: BN,
-  decimals: BN | number,
-  tokenAddress: Address,
+  balance: BigNumber,
+  decimals: BigNumber | number,
+  tokenAddress: Address | undefined,
   tokenSymbol: string): string {
-  let shiftedBalance: BN
-  const tokenDecimals = toBN(decimals.toString())
-  if (tokenDecimals.eqn(18)) {
+  let shiftedBalance: BigNumber
+  const tokenDecimals = BigNumber.from(decimals.toString())
+  if (tokenDecimals.eq(18)) {
     shiftedBalance = balance
-  } else if (tokenDecimals.ltn(18)) {
-    const shift = toBN(18).sub(tokenDecimals)
-    shiftedBalance = balance.mul(toBN(10).pow(shift))
+  } else if (tokenDecimals.lt(18)) {
+    const shift = BigNumber.from(18).sub(tokenDecimals)
+    shiftedBalance = balance.mul(BigNumber.from(10).pow(shift))
   } else {
-    const shift = tokenDecimals.subn(18)
-    shiftedBalance = balance.div(toBN(10).pow(shift))
+    const shift = tokenDecimals.sub(18)
+    shiftedBalance = balance.div(BigNumber.from(10).pow(shift))
   }
-  const shortTokenAddress = `${tokenAddress.substring(0, 6)}...${tokenAddress.substring(39)}`
-  return `${fromWei(shiftedBalance)} ${tokenSymbol} (${shortTokenAddress})`
+  let shortTokenAddress = ''
+  if (tokenAddress != null) {
+    shortTokenAddress = `(${tokenAddress.substring(0, 6)}...${tokenAddress.substring(39)})`
+  }
+  return `${fromWei(shiftedBalance.toString())} ${tokenSymbol} ${shortTokenAddress}`
 }
 
 export function splitRelayUrlForRegistrar (url: string, partsCount: number = 3): string[] {
@@ -355,11 +282,7 @@ export function packRelayUrlForRegistrar (parts: string[]): string {
       .replace(/(00)+$/g, ''), 'hex').toString()
 }
 
-function isBigNumber (object: Object): boolean {
-  return object?.constructor?.name === 'BigNumber' || object?.constructor?.name === 'BN'
-}
-
-export function toNumber (numberish: number | string | BN | BigInt): number {
+export function toNumber (numberish: number | string | BN | BigNumber | bigint): number {
   switch (typeof numberish) {
     case 'string':
       return parseFloat(numberish)
@@ -368,7 +291,7 @@ export function toNumber (numberish: number | string | BN | BigInt): number {
     case 'bigint':
       return Number(numberish)
     case 'object':
-      if (isBigNumber(numberish)) {
+      if (isBigNumber(numberish) || typeof (numberish as any).toNumber === 'function') {
         // @ts-ignore
         return numberish.toNumber()
       }
@@ -379,22 +302,25 @@ export function toNumber (numberish: number | string | BN | BigInt): number {
 }
 
 export function getRelayRequestID (relayRequest: RelayRequest, signature: PrefixedHexString): PrefixedHexString {
-  const web3 = new Web3()
   const types = ['address', 'uint256', 'bytes']
   const parameters = [relayRequest.request.from, relayRequest.request.nonce, signature]
-  const hash = web3.utils.keccak256(web3.eth.abi.encodeParameters(types, parameters))
+  const abiCoder = new ethers.utils.AbiCoder()
+  const hash = keccak256(abiCoder.encode(types, parameters))
   const rawRelayRequestId = removeHexPrefix(hash).padStart(64, '0')
   const prefixSize = 8
   const prefixedRelayRequestId = rawRelayRequestId.replace(new RegExp(`^.{${prefixSize}}`), '0'.repeat(prefixSize))
   return `0x${prefixedRelayRequestId}`
 }
 
-export function getERC165InterfaceID (abi: AbiItem[]): string {
-  const web3 = new Web3()
+export function getERC165InterfaceID (abi: JsonFragment[]): string {
   let interfaceId =
     abi
-      .filter(it => it.type === 'function')
-      .map(web3.eth.abi.encodeFunctionSignature)
+      .filter(it => it.type === 'function' && it.name != null)
+      .map(it => {
+        const iface = new Interface([it])
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        return iface.getSighash(it.name!)
+      })
       .filter(it => it !== '0x01ffc9a7') // remove the IERC165 method itself
       .map((x) => parseInt(x, 16))
       .reduce((x, y) => x ^ y)
@@ -421,12 +347,10 @@ export function shuffle<T> (array: T[]): T[] {
 }
 
 /**
- * @param winner - the selected result if at least one promise had resolved successfully
  * @param results - all successfully resolved results in the order that they resolved.
  * @param errors - all rejection results
  */
 export interface WaitForSuccessResults<T> {
-  winner?: T
   results: T[]
   errors: Map<string, Error>
 }
@@ -444,8 +368,7 @@ export interface WaitForSuccessResults<T> {
 export async function waitForSuccess<T> (
   promises: Array<Promise<T>>,
   errorKeys: string[],
-  graceTime: number,
-  random = Math.random): Promise<WaitForSuccessResults<T>> {
+  graceTime: number): Promise<WaitForSuccessResults<T>> {
   if (promises.length !== errorKeys.length) {
     throw new Error('Invalid errorKeys length')
   }
@@ -462,9 +385,6 @@ export async function waitForSuccess<T> (
     }
 
     function complete (): void {
-      if (ret.results.length !== 0) {
-        ret.winner = ret.results[Math.floor(random() * ret.results.length)]
-      }
       resolve(ret)
     }
 
@@ -488,9 +408,70 @@ export async function waitForSuccess<T> (
   })
 }
 
-export function averageBN (array: BN[]): BN {
+export function pickRandomElementFromArray<T> (arrayIn: T[], random = Math.random): T {
+  return arrayIn[Math.floor(random() * arrayIn.length)]
+}
+
+/**
+ * @return newValue - the best value to use as a gas parameter:
+ *          the one RelayProvider used if it is above RelayServer minimum, the minimum otherwise
+ * @return deltaPercent - the difference between input and result, in percents
+ */
+export function adjustGasCostParameterUp (
+  clientInput: number,
+  pingResponseMinimum: number
+): { newValue: number, deltaPercent: number } {
+  if (clientInput >= pingResponseMinimum) {
+    return { newValue: clientInput, deltaPercent: 0 }
+  }
+  const deltaPercent = Math.round(((pingResponseMinimum - clientInput) * 100) / clientInput)
+  return { newValue: pingResponseMinimum, deltaPercent }
+}
+
+/**
+ * The RelayServer may respond with a {@link PingResponse} with a response that will require adjusting some parameters.
+ * @return - a {@link RelayRequest} with parameters that should satisfy the RelayServer,
+ *           or null if the required gas fees are different more than the {@link gasPriceFactorPercent}.
+ */
+export function adjustRelayRequestForPingResponse (
+  feesIn: EIP1559Fees,
+  relayInfo: PartialRelayInfo,
+  logger: LoggerInterface
+): RelaySelectionResult {
+  const maxPriorityFeePerGas = adjustGasCostParameterUp(
+    parseInt(feesIn.maxPriorityFeePerGas),
+    parseInt(relayInfo.pingResponse.minMaxPriorityFeePerGas)
+  )
+
+  let maxFeePerGas = adjustGasCostParameterUp(
+    parseInt(feesIn.maxFeePerGas),
+    parseInt(relayInfo.pingResponse.minMaxFeePerGas)
+  )
+
+  if (maxPriorityFeePerGas.newValue > maxFeePerGas.newValue) {
+    logger.warn(`Attention: for relay ${relayInfo.relayInfo.relayUrl} had to adjust 'maxFeePerGas' to be equal 'maxPriorityFeePerGas' (from ${maxFeePerGas.newValue} to ${maxPriorityFeePerGas.newValue}) to avoid RPC error.`)
+    // reusing 'adjustGasCostParameterUp' but with new priority fee as minimum to get correct 'deltaPercent' calculation for the sorting
+    maxFeePerGas = adjustGasCostParameterUp(
+      parseInt(feesIn.maxFeePerGas),
+      maxPriorityFeePerGas.newValue
+    )
+  }
+
+  const updatedGasFees: EIP1559Fees = {
+    maxPriorityFeePerGas: toHex(maxPriorityFeePerGas.newValue),
+    maxFeePerGas: toHex(maxFeePerGas.newValue)
+  }
+  const maxDeltaPercent = Math.max(maxFeePerGas.deltaPercent, maxPriorityFeePerGas.deltaPercent)
+  return {
+    relayInfo,
+    maxDeltaPercent,
+    updatedGasFees
+  }
+}
+
+export function averageBN (array: BigNumber[]): BigNumber {
   const sum = array.reduce((a, v) => a.add(v))
-  return sum.divn(array.length)
+  return sum.div(array.length)
 }
 
 export function validateRelayUrl (relayUrl: string): boolean {
@@ -501,4 +482,16 @@ export function validateRelayUrl (relayUrl: string): boolean {
     return false
   }
   return url.protocol === 'http:' || url.protocol === 'https:'
+}
+
+export function appendSlashTrim (urlInput: string): string {
+  urlInput = urlInput.trim()
+  if (urlInput[urlInput.length - 1] !== '/') {
+    urlInput += '/'
+  }
+  return urlInput
+}
+
+export function bigNumberMin (a: BigNumber, b: BigNumber): BigNumber {
+  return a.lt(b) ? a : b
 }

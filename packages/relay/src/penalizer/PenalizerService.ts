@@ -1,9 +1,9 @@
 // @ts-ignore
 import abiDecoder from 'abi-decoder'
 import crypto from 'crypto'
-import { Transaction as EthereumJsTransaction, TxOptions, TxData } from '@ethereumjs/tx'
-import { Transaction as Web3CoreTransaction } from 'web3-core'
-import { bufferToHex, isZeroAddress, PrefixedHexString, toBuffer } from 'ethereumjs-util'
+import { Transaction as EthereumJsTransaction, type TxOptions, type TxData } from '@ethereumjs/tx'
+import { type TransactionResponse } from '@ethersproject/providers'
+import { bufferToHex, isZeroAddress, type PrefixedHexString, toBuffer } from 'ethereumjs-util'
 import * as ethUtils from 'ethereumjs-util'
 
 import PayMasterABI from '@opengsn/common/dist/interfaces/IPaymaster.json'
@@ -11,28 +11,30 @@ import RelayHubABI from '@opengsn/common/dist/interfaces/IRelayHub.json'
 import StakeManagerABI from '@opengsn/common/dist/interfaces/IStakeManager.json'
 
 import {
-  AuditRequest,
-  AuditResponse,
+  type AuditRequest,
+  type AuditResponse,
   CommitAdded,
-  ContractInteractor,
-  LoggerInterface,
+  type ContractInteractor,
+  type LoggerInterface,
   VersionsManager,
   address2topic,
   constants,
-  getDataAndSignature,
   gsnRequiredVersion,
   gsnRuntimeVersion,
   removeHexPrefix,
+  toHex,
   toNumber
 } from '@opengsn/common'
 
 import { replaceErrors } from '@opengsn/common/dist/ErrorReplacerJSON'
-import { BlockExplorerInterface } from './BlockExplorerInterface'
+import { type BlockExplorerInterface } from './BlockExplorerInterface'
+import { getDataAndSignature } from './PenalizerUtils'
 
 import { ServerAction } from '../StoredTransaction'
-import { TransactionManager } from '../TransactionManager'
+import { type TransactionManager } from '../TransactionManager'
 
-import { ServerConfigParams } from '../ServerConfigParams'
+import { type ServerConfigParams } from '../ServerConfigParams'
+import { type Web3MethodsBuilder } from '../Web3MethodsBuilder'
 
 import Timeout = NodeJS.Timeout
 
@@ -49,24 +51,23 @@ const NONCE_FORWARD = 'Transaction nonce is higher then current account nonce an
 export interface PenalizerDependencies {
   transactionManager: TransactionManager
   contractInteractor: ContractInteractor
+  web3MethodsBuilder: Web3MethodsBuilder
   txByNonceService: BlockExplorerInterface
 }
 
-function createWeb3Transaction (transaction: Web3CoreTransaction, rawTxOptions: TxOptions): EthereumJsTransaction {
-  const gasPrice = '0x' + BigInt(transaction.gasPrice).toString(16)
-  const value = '0x' + BigInt(transaction.value).toString(16)
+function createWeb3Transaction (transaction: TransactionResponse, rawTxOptions: TxOptions): EthereumJsTransaction {
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+  const gasPrice = '0x' + BigInt(transaction.gasPrice!.toString()).toString(16)
+  const value = '0x' + BigInt(transaction.value.toString()).toString(16)
   const txData: TxData = {
-    gasLimit: transaction.gas,
+    gasLimit: toHex(transaction.gasLimit.toString()),
     gasPrice,
     to: transaction.to ?? '',
-    data: transaction.input,
+    data: transaction.data,
     nonce: transaction.nonce,
     value,
-    // @ts-ignore
     v: transaction.v,
-    // @ts-ignore
     r: transaction.r,
-    // @ts-ignore
     s: transaction.s
   }
   return new EthereumJsTransaction(txData, rawTxOptions)
@@ -96,6 +97,7 @@ export class PenalizerService {
   scheduledPenalizations: DelayedPenalization[] = []
   transactionManager: TransactionManager
   contractInteractor: ContractInteractor
+  web3MethodsBuilder: Web3MethodsBuilder
   txByNonceService: BlockExplorerInterface
   versionManager: VersionsManager
   logger: LoggerInterface
@@ -107,6 +109,7 @@ export class PenalizerService {
   constructor (params: PenalizerDependencies, logger: LoggerInterface, config: ServerConfigParams) {
     this.transactionManager = params.transactionManager
     this.contractInteractor = params.contractInteractor
+    this.web3MethodsBuilder = params.web3MethodsBuilder
     this.versionManager = new VersionsManager(gsnRuntimeVersion, config.requiredVersionRange ?? gsnRequiredVersion)
     this.config = config
     this.txByNonceService = params.txByNonceService
@@ -255,12 +258,12 @@ export class PenalizerService {
       const commitments = await this.contractInteractor.getPastEventsForPenalizer([CommitAdded], topics, { fromBlock: 1 })
       const newlyMinedCommitments = commitments
         .filter(it => {
-          return nonMinedCommitHashes.includes(it.returnValues.commitHash)
+          return nonMinedCommitHashes.includes(it.args.commitHash)
         })
       unconfirmedPenalizations.forEach(it => {
-        const commitment = newlyMinedCommitments.find(nmc => nmc.returnValues.commitHash === it.commitHash)
+        const commitment = newlyMinedCommitments.find(nmc => nmc.args.commitHash === it.commitHash)
         if (commitment != null) {
-          it.readyBlockNumber = commitment.returnValues.readyBlockNumber
+          it.readyBlockNumber = commitment.args.readyBlockNumber
         }
       })
     }
@@ -299,7 +302,7 @@ export class PenalizerService {
 
   async commitAndScheduleReveal (delayedPenalization: DelayedPenalization): Promise<any> {
     this.scheduledPenalizations.push(delayedPenalization)
-    const method = this.contractInteractor.penalizerInstance.contract.methods.commit(delayedPenalization.commitHash)
+    const method = this.web3MethodsBuilder.getPenalizerCommitMethod(delayedPenalization.commitHash)
     return await this.broadcastTransaction('commit', method)
   }
 
@@ -403,9 +406,9 @@ export class PenalizerService {
   getMethod (penalizationTypes: PenalizationTypes, methodArgs: PrefixedHexString[]): any {
     switch (penalizationTypes) {
       case PenalizationTypes.REPEATED_NONCE:
-        return this.contractInteractor.penalizerInstance.contract.methods.penalizeRepeatedNonce(...methodArgs)
+        return this.web3MethodsBuilder.getPenalizeRepeatedNonceMethod(...methodArgs)
       case PenalizationTypes.ILLEGAL_TRANSACTION:
-        return this.contractInteractor.penalizerInstance.contract.methods.penalizeIllegalTransaction(...methodArgs)
+        return this.web3MethodsBuilder.getPenalizeIllegalTransactionMethod(...methodArgs)
     }
   }
 }

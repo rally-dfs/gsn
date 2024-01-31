@@ -1,27 +1,30 @@
 import BN from 'bn.js'
 import { ether, expectEvent } from '@openzeppelin/test-helpers'
+import { StaticJsonRpcProvider } from '@ethersproject/providers'
 
 import {
-  ArbRelayHubInstance,
-  ForwarderInstance,
-  StakeManagerInstance,
-  TestRecipientInstance,
-  TestTokenInstance
-} from '@opengsn/contracts/types/truffle-contracts'
+  type ArbRelayHubInstance,
+  type ForwarderInstance,
+  type RelayRegistrarInstance,
+  type StakeManagerInstance,
+  type TestRecipientInstance,
+  type TestTokenInstance
+} from '../../types/truffle-contracts'
 import {
-  RelayRequest,
+  type RelayRequest,
   TypedRequestData,
   constants,
   defaultEnvironment,
   environments,
   getEip712Signature,
-  registerForwarderForGsn,
   splitRelayUrlForRegistrar
 } from '@opengsn/common'
 
-import { TransactionRelayed } from '@opengsn/contracts/types/truffle-contracts/RelayHub'
-import { RelayRegistrarInstance } from '@opengsn/contracts'
+import { type TransactionRelayed } from '../../types/truffle-contracts/RelayHub'
 import { defaultGsnConfig } from '@opengsn/provider'
+import { registerForwarderForGsn } from '@opengsn/cli/dist/ForwarderUtil'
+
+import { hardhatNodeChainId } from '../TestUtils'
 
 const TestToken = artifacts.require('TestToken')
 const Forwarder = artifacts.require('Forwarder')
@@ -83,7 +86,7 @@ contract('ArbRelayHub', function ([from, relayWorker, relayManager, relayOwner]:
 
       await arbRelayHub.depositFor(paymaster.address, {
         value: ether('1'),
-        from: from
+        from
       })
 
       await testToken.mint(stake, { from: relayOwner })
@@ -100,7 +103,7 @@ contract('ArbRelayHub', function ([from, relayWorker, relayManager, relayOwner]:
         request: {
           to: testRecipient.address,
           data: testRecipient.contract.methods.emitMessageNoParams().encodeABI(),
-          from: from,
+          from,
           nonce: '0',
           value: '0',
           gas: '1000000',
@@ -119,12 +122,16 @@ contract('ArbRelayHub', function ([from, relayWorker, relayManager, relayOwner]:
       }
       const dataToSign = new TypedRequestData(
         defaultGsnConfig.domainSeparatorName,
-        defaultEnvironment.chainId,
+        hardhatNodeChainId,
         forwarder.address,
         relayRequest
       )
+
+      // @ts-ignore
+      const currentProviderHost = web3.currentProvider.host
+      const provider = new StaticJsonRpcProvider(currentProviderHost)
       signature = await getEip712Signature(
-        web3,
+        provider.getSigner(),
         dataToSign
       )
     })

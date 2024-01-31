@@ -1,5 +1,5 @@
-import { PrefixedHexString } from 'ethereumjs-util'
-import { ApprovalDataCallback, HttpWrapper, LoggerInterface, RelayRequest } from '@opengsn/common'
+import { type PrefixedHexString } from 'ethereumjs-util'
+import { type ApprovalDataCallback, type HttpWrapper, type LoggerInterface, type RelayRequest, appendSlashTrim } from '@opengsn/common'
 
 // TODO: replace with production URL before release
 export const DEFAULT_VERIFIER_SERVER_URL = 'https://staging-api.opengsn.org'
@@ -32,7 +32,7 @@ export function createVerifierApprovalDataCallback (
       relayRequest,
       relayRequestId
     }
-    const signRelayRequestResponse = await httpWrapper.sendPromise(`${verifierUrl}/signRelayRequest`, approvalRequest)
+    const signRelayRequestResponse = await httpWrapper.sendPromise(new URL('signRelayRequest', appendSlashTrim(verifierUrl)), approvalRequest)
     logger.info(`signRelayRequest response: ${JSON.stringify(signRelayRequestResponse)}`)
     return signRelayRequestResponse.signature
   }

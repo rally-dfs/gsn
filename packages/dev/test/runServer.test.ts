@@ -1,17 +1,17 @@
-import { HttpProvider } from 'web3-core'
-
+import { StaticJsonRpcProvider } from '@ethersproject/providers'
 import { RelayProvider } from '@opengsn/provider/dist/RelayProvider'
 import {
-  RelayHubInstance,
-  StakeManagerInstance,
-  TestPaymasterEverythingAcceptedInstance,
-  TestRecipientInstance,
-  TestTokenInstance
-} from '@opengsn/contracts/types/truffle-contracts'
+  type RelayHubInstance,
+  type StakeManagerInstance,
+  type TestPaymasterEverythingAcceptedInstance,
+  type TestRecipientInstance,
+  type TestTokenInstance
+} from '../types/truffle-contracts'
 import { deployHub, emptyBalance, evmMineMany, serverWorkDir, startRelay, stopRelay } from './TestUtils'
-import { ChildProcessWithoutNullStreams } from 'child_process'
-import { defaultGsnConfig, GSNConfig } from '@opengsn/provider/dist/GSNConfigurator'
-import { registerForwarderForGsn, defaultEnvironment, constants, ether, Address } from '@opengsn/common'
+import { type ChildProcessWithoutNullStreams } from 'child_process'
+import { defaultGsnConfig, type GSNConfig } from '@opengsn/provider/dist/GSNConfigurator'
+import { defaultEnvironment, constants, ether, type Address } from '@opengsn/common'
+import { registerForwarderForGsn } from '@opengsn/cli/dist/ForwarderUtil'
 
 import Web3 from 'web3'
 import fs from 'fs'
@@ -24,6 +24,7 @@ const StakeManager = artifacts.require('StakeManager')
 const Penalizer = artifacts.require('Penalizer')
 const Forwarder = artifacts.require('Forwarder')
 const TestToken = artifacts.require('TestToken')
+
 contract('runServer', function (accounts) {
   let sr: TestRecipientInstance
   let paymaster: TestPaymasterEverythingAcceptedInstance
@@ -35,6 +36,10 @@ contract('runServer', function (accounts) {
   let relayClientConfig: Partial<GSNConfig>
   let relayProvider: RelayProvider
   const stake = 1e18.toString()
+
+  // @ts-ignore
+  const currentProviderHost = web3.currentProvider.host
+  const ethersProvider = new StaticJsonRpcProvider(currentProviderHost)
 
   async function deployGsnContracts (): Promise<void> {
     testToken = await TestToken.new()
@@ -71,11 +76,11 @@ contract('runServer', function (accounts) {
       maxPaymasterDataLength: 4
     }
 
-    relayProvider = await RelayProvider.newProvider(
+    relayProvider = await RelayProvider.newWeb3Provider(
       {
-        provider: web3.currentProvider as HttpProvider,
+        provider: ethersProvider,
         config: relayClientConfig
-      }).init()
+      })
 
     // @ts-ignore
     TestRecipient.web3.setProvider(relayProvider)
@@ -96,7 +101,6 @@ contract('runServer', function (accounts) {
         stake,
         stakeTokenAddress: testToken.address,
         delay: 3600 * 24 * 7,
-        url: 'asd',
         relayOwner: accounts[0],
         // @ts-ignore
         ethereumNodeUrl: web3.currentProvider.host,
@@ -123,7 +127,7 @@ contract('runServer', function (accounts) {
         // eslint-disable-next-line @typescript-eslint/restrict-template-expressions
         assert.isTrue(ex == null, `should succeed sending gasless transaction through relay. got: ${ex?.toString()}`)
       } finally {
-        await stopRelay(relayProcess)
+        stopRelay(relayProcess)
       }
     }
     // Sanity check that there are three directories in the test workdir for each hub

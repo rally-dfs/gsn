@@ -1,11 +1,13 @@
-import { PrefixedHexString } from 'ethereumjs-util'
-import { PingResponse } from '../PingResponse'
-import { RelayRequest } from '../EIP712/RelayRequest'
-import { GsnTransactionDetails } from './GsnTransactionDetails'
-import { RegistrarRelayInfo } from './RelayInfo'
-import { HttpProvider, IpcProvider, WebsocketProvider } from 'web3-core'
-import { JsonRpcPayload, JsonRpcResponse } from 'web3-core-helpers'
-import { TypedMessage } from '@metamask/eth-sig-util'
+import { type PrefixedHexString } from 'ethereumjs-util'
+import { type JsonRpcProvider, type Log } from '@ethersproject/providers'
+import { type LogDescription } from '@ethersproject/abi'
+
+import { type PingResponse } from '../PingResponse'
+import { type RelayRequest } from '../EIP712/RelayRequest'
+import { type GsnTransactionDetails } from './GsnTransactionDetails'
+import { type RegistrarRelayInfo, type PartialRelayInfo } from './RelayInfo'
+import { type TypedMessage } from '@metamask/eth-sig-util'
+import { type Environment } from '../environments/Environments'
 
 export type Address = string
 export type EventName = string
@@ -26,7 +28,17 @@ export type ApprovalDataCallback = (relayRequest: RelayRequest, relayRequestId: 
 
 export type SignTypedDataCallback = (signedData: TypedMessage<any>, from: Address) => Promise<PrefixedHexString>
 
+/**
+ * Different L2 rollups and side-chains have different behavior for the calldata gas cost.
+ * This means the calldata estimation cannot be hard-coded and new implementations should be easy to add.
+ * Note that both Relay Client and Relay Server must come to the same number.
+ * Also, this value does include the base transaction cost (2100 on mainnet).
+ */
+export type CalldataGasEstimation = (calldata: PrefixedHexString, environment: Environment, calldataEstimationSlackFactor: number, provider: JsonRpcProvider) => Promise<number>
+
 export type RelayFilter = (registrarRelayInfo: RegistrarRelayInfo) => boolean
+
+export type EventData = Log & LogDescription
 
 export function notNull<TValue> (value: TValue | null | undefined): value is TValue {
   return value !== null && value !== undefined
@@ -35,23 +47,17 @@ export function notNull<TValue> (value: TValue | null | undefined): value is TVa
 /**
  * This is an intersection of NPM log levels and 'loglevel' library methods.
  */
-export type NpmLogLevel = 'error' | 'warn' | 'info' | 'debug'
+export type NpmLogLevel = 'silent' | 'error' | 'warn' | 'info' | 'debug'
 
-export type Web3Provider =
-  | HttpProvider
-  | IpcProvider
-  | WebsocketProvider
-
-/**
- * The only thing that is guaranteed a Web3 provider or a similar object is a {@link send} method.
- */
-export interface Web3ProviderBaseInterface {
-  send: (
-    payload: JsonRpcPayload,
-    callback: (error: Error | null, result?: JsonRpcResponse) => void
-  ) => void
+export interface RelaySelectionResult {
+  relayInfo: PartialRelayInfo
+  maxDeltaPercent: number
+  updatedGasFees: EIP1559Fees
 }
 
-export interface ObjectMap<T> {
-  [key: string]: T
+export interface EIP1559Fees {
+  maxFeePerGas: PrefixedHexString
+  maxPriorityFeePerGas: PrefixedHexString
 }
+
+export type ObjectMap<T> = Record<string, T>

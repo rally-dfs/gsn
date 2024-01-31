@@ -1,10 +1,10 @@
 import chai from 'chai'
 import chaiAsPromised from 'chai-as-promised'
-import { HttpProvider } from 'web3-core'
+import { StaticJsonRpcProvider } from '@ethersproject/providers'
 
-import { ContractInteractor, LoggerInterface, defaultEnvironment } from '@opengsn/common'
+import { ContractInteractor, type LoggerInterface, defaultEnvironment } from '@opengsn/common'
 
-import { Server } from 'net'
+import { type Server } from 'net'
 import { GasPriceFetcher } from '@opengsn/relay/dist/GasPriceFetcher'
 
 import express from 'express'
@@ -15,6 +15,9 @@ context('GasPriceFetcher', function () {
   let errorlog: string
   let gasPriceFetcher: GasPriceFetcher
   let contractInteractor: ContractInteractor
+  // @ts-ignore
+  const currentProviderHost = web3.currentProvider.host
+  const provider = new StaticJsonRpcProvider(currentProviderHost)
 
   const logger = {
     error: (e: string) => {
@@ -32,7 +35,8 @@ context('GasPriceFetcher', function () {
     contractInteractor = new ContractInteractor({
       environment: defaultEnvironment,
       maxPageSize: Number.MAX_SAFE_INTEGER,
-      provider: web3.currentProvider as HttpProvider,
+      provider,
+      signer: provider.getSigner(),
       logger
     })
 
@@ -85,7 +89,7 @@ context('GasPriceFetcher', function () {
     gasPriceFetcher = new GasPriceFetcher(oracleUrl, '.result.ProposeGasPrice', contractInteractor, logger)
     mockOracleResponse = etherscanOracleResponse
     assert.equal(
-      await gasPriceFetcher.getGasPrice(),
+      (await gasPriceFetcher.getGasPrice()).toString(),
       (JSON.parse(etherscanOracleResponse).result.ProposeGasPrice * 1e9).toString())
   })
   it('should use getGasPrice() if path not found', async () => {
@@ -93,7 +97,7 @@ context('GasPriceFetcher', function () {
 
     errorlog = ''
     assert.equal(
-      await gasPriceFetcher.getGasPrice(),
+      (await gasPriceFetcher.getGasPrice()).toString(),
       await web3.eth.getGasPrice())
     assert.match(errorlog, /not a number/)
   })
@@ -102,7 +106,7 @@ context('GasPriceFetcher', function () {
     mockOracleResponse = 'something that is not json response'
     errorlog = ''
     assert.equal(
-      await gasPriceFetcher.getGasPrice(),
+      (await gasPriceFetcher.getGasPrice()).toString(),
       await web3.eth.getGasPrice())
 
     assert.match(errorlog, /not a number/)
@@ -111,7 +115,7 @@ context('GasPriceFetcher', function () {
     gasPriceFetcher = new GasPriceFetcher('http://localhost:23456', '.result.ProposeGasPrice', contractInteractor, logger)
     errorlog = ''
     assert.equal(
-      await gasPriceFetcher.getGasPrice(),
+      (await gasPriceFetcher.getGasPrice()).toString(),
       await web3.eth.getGasPrice())
     assert.match(errorlog, /ECONNREFUSED/)
   })

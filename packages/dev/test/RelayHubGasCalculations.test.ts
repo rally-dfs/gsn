@@ -1,41 +1,41 @@
 /* eslint-disable no-global-assign */
 
 import BN from 'bn.js'
-import { HttpProvider } from 'web3-core'
 import { ether } from '@openzeppelin/test-helpers'
+import { StaticJsonRpcProvider } from '@ethersproject/providers'
 
 import {
   getEip712Signature
 } from '@opengsn/common/dist/Utils'
 import {
   ContractInteractor,
-  GSNContractsDeployment,
+  type GSNContractsDeployment,
   RelayCallStatusCodes,
-  RelayData,
-  RelayHubConfiguration,
-  RelayRequest,
+  type RelayData,
+  type RelayHubConfiguration,
+  type RelayRequest,
   TypedRequestData,
   cloneRelayRequest,
   constants,
   defaultEnvironment,
-  registerForwarderForGsn,
   splitRelayUrlForRegistrar,
   toNumber
 } from '@opengsn/common'
 
 import {
-  RelayHubInstance,
-  TestRecipientInstance,
-  TestPaymasterVariableGasLimitsInstance,
-  StakeManagerInstance,
-  IForwarderInstance,
-  PenalizerInstance,
-  RelayRegistrarInstance,
-  TestTokenInstance
-} from '@opengsn/contracts/types/truffle-contracts'
-import { deployHub, revert, snapshot } from './TestUtils'
+  type RelayHubInstance,
+  type TestRecipientInstance,
+  type TestPaymasterVariableGasLimitsInstance,
+  type StakeManagerInstance,
+  type IForwarderInstance,
+  type PenalizerInstance,
+  type RelayRegistrarInstance,
+  type TestTokenInstance
+} from '../types/truffle-contracts'
+import { deployHub, hardhatNodeChainId, revert, snapshot } from './TestUtils'
 
 import { createClientLogger } from '@opengsn/logger/dist/ClientWinstonLogger'
+import { registerForwarderForGsn } from '@opengsn/cli/dist/ForwarderUtil'
 import { toBN } from 'web3-utils'
 
 import * as process from 'process'
@@ -60,7 +60,7 @@ if (process.env.GAS_CALCULATIONS == null) {
 contract('RelayHub gas calculations', function ([_, relayOwner, relayWorker, relayManager, senderAddress, other]) {
   const message = 'Gas Calculations'
   const unstakeDelay = 15000
-  const chainId = defaultEnvironment.chainId
+  const chainId = hardhatNodeChainId
   const gasPrice = new BN(1e9)
   const maxFeePerGas = 1e9.toString()
   const maxPriorityFeePerGas = 1e9.toString()
@@ -72,6 +72,10 @@ contract('RelayHub gas calculations', function ([_, relayOwner, relayWorker, rel
   const stake = ether('2')
 
   const senderNonce = new BN('0')
+
+  // @ts-ignore
+  const currentProviderHost = web3.currentProvider.host
+  const ethersProvider = new StaticJsonRpcProvider(currentProviderHost)
 
   let relayHub: RelayHubInstance
   let relayRegistrar: RelayRegistrarInstance
@@ -152,7 +156,7 @@ contract('RelayHub gas calculations', function ([_, relayOwner, relayWorker, rel
       relayRequest
     )
     signature = await getEip712Signature(
-      web3,
+      ethersProvider.getSigner(senderAddress),
       dataToSign
     )
 
@@ -162,7 +166,8 @@ contract('RelayHub gas calculations', function ([_, relayOwner, relayWorker, rel
     contractInteractor = new ContractInteractor({
       domainSeparatorName: defaultGsnConfig.domainSeparatorName,
       environment: defaultEnvironment,
-      provider: web3.currentProvider as HttpProvider,
+      provider: ethersProvider,
+      signer: ethersProvider.getSigner(),
       logger,
       maxPageSize,
       deployment
@@ -253,7 +258,7 @@ contract('RelayHub gas calculations', function ([_, relayOwner, relayWorker, rel
         relayRequestMisbehaving
       )
       const signature = await getEip712Signature(
-        web3,
+        ethersProvider.getSigner(senderAddress),
         dataToSign
       )
       const viewRelayCallResponse =
@@ -271,7 +276,7 @@ contract('RelayHub gas calculations', function ([_, relayOwner, relayWorker, rel
       const res = await relayHub.relayCall(defaultGsnConfig.domainSeparatorName, 10e6, relayRequestMisbehaving, signature, '0x', {
         from: relayWorker,
         gas: externalGasLimit,
-        gasPrice: gasPrice
+        gasPrice
       })
 
       assert.equal('TransactionRejectedByPaymaster', res.logs[0].event)
@@ -361,7 +366,7 @@ contract('RelayHub gas calculations', function ([_, relayOwner, relayWorker, rel
               clientId
             }
           }
-          relayRequest.relayData.transactionCalldataGasUsed = contractInteractor.estimateCalldataCostForRequest(relayRequest, {
+          relayRequest.relayData.transactionCalldataGasUsed = await contractInteractor.estimateCalldataCostForRequest(relayRequest, {
             maxPaymasterDataLength: 0,
             maxApprovalDataLength: 0
           })
@@ -372,13 +377,13 @@ contract('RelayHub gas calculations', function ([_, relayOwner, relayWorker, rel
             relayRequest
           )
           const signature = await getEip712Signature(
-            web3,
+            ethersProvider.getSigner(senderAddress),
             dataToSign
           )
           const res = await relayHub.relayCall(defaultGsnConfig.domainSeparatorName, 10e6, relayRequest, signature, '0x', {
             from: relayWorker,
             gas: externalGasLimit,
-            gasPrice: gasPrice
+            gasPrice
           })
 
           const encodedData = contractInteractor.encodeABI({
@@ -390,7 +395,7 @@ contract('RelayHub gas calculations', function ([_, relayOwner, relayWorker, rel
           })
           // As there can be some discrepancy between estimation and actual cost (zeroes in signature, etc.)
           // we actually account for this difference this way
-          const actualTransactionCalldataGasUsed = contractInteractor.calculateCalldataGasUsed(encodedData)
+          const actualTransactionCalldataGasUsed = await contractInteractor.calculateCalldataGasUsed(encodedData, defaultEnvironment, 1, ethersProvider)
           const calldataOverchargeGas =
             (parseInt(relayRequest.relayData.transactionCalldataGasUsed) - actualTransactionCalldataGasUsed)
           // This discrepancy should not be even close 100 gas in a transaction without paymaster, approval datas
@@ -463,16 +468,16 @@ contract('RelayHub gas calculations', function ([_, relayOwner, relayWorker, rel
             relayRequest
           )
           const signature = await getEip712Signature(
-            web3,
+            ethersProvider.getSigner(senderAddress),
             dataToSign
           )
           const relayCall = relayHub.contract.methods.relayCall(defaultGsnConfig.domainSeparatorName, 10e6, relayRequest, signature, approvalData)
           const receipt = await relayCall.send({
             from: relayWorker,
             gas: externalGasLimit,
-            gasPrice: gasPrice
+            gasPrice
           })
-          gassesUsed.push(receipt.gasUsed - contractInteractor.calculateCalldataGasUsed(relayCall.encodeABI()))
+          gassesUsed.push(receipt.gasUsed - await contractInteractor.calculateCalldataGasUsed(relayCall.encodeABI(), defaultEnvironment, 1, ethersProvider))
           // console.log('relayCall encodeABI len', relayCall.encodeABI().length / 2)
           // console.log('gasUsed is', receipt.gasUsed)
           // console.log('calculateCalldataCost is', calculateCalldataCost(relayCall.encodeABI()))
@@ -498,11 +503,11 @@ contract('RelayHub gas calculations', function ([_, relayOwner, relayWorker, rel
 
   describe('check calculation does not break for different fees', function () {
     [0, 1000]
-      .forEach(messageLength =>
+      .forEach(messageLength => {
         [0, 10, 100]
-          .forEach(requestedFee =>
+          .forEach(requestedFee => {
             [0, 20].forEach(devFee => {
-              // avoid duplicate coverage checks. they do the same, and take a lot of time:
+            // avoid duplicate coverage checks. they do the same, and take a lot of time:
               if (requestedFee !== 0 && messageLength !== 0 && process.env.MODE === 'coverage') return
               // 50k tests take more than 10 seconds to complete so will run once for sanity
               if (messageLength === 50000 && requestedFee !== 10) return
@@ -542,7 +547,7 @@ contract('RelayHub gas calculations', function ([_, relayOwner, relayWorker, rel
                       clientId
                     }
                   }
-                  relayRequest.relayData.transactionCalldataGasUsed = contractInteractor.estimateCalldataCostForRequest(relayRequest, {
+                  relayRequest.relayData.transactionCalldataGasUsed = await contractInteractor.estimateCalldataCostForRequest(relayRequest, {
                     maxPaymasterDataLength: 0,
                     maxApprovalDataLength: 0
                   })
@@ -553,13 +558,13 @@ contract('RelayHub gas calculations', function ([_, relayOwner, relayWorker, rel
                     relayRequest
                   )
                   const signature = await getEip712Signature(
-                    web3,
+                    ethersProvider.getSigner(senderAddress),
                     dataToSign
                   )
                   const res = await relayHub.relayCall(defaultGsnConfig.domainSeparatorName, 10e6, relayRequest, signature, '0x', {
                     from: relayWorker,
                     gas: externalGasLimit,
-                    gasPrice: gasPrice
+                    gasPrice
                   })
 
                   const afterBalances = await getBalances()
@@ -583,7 +588,7 @@ contract('RelayHub gas calculations', function ([_, relayOwner, relayWorker, rel
                     approvalData: '0x'
                   })
 
-                  const actualTransactionCalldataGasUsed = contractInteractor.calculateCalldataGasUsed(encodedData)
+                  const actualTransactionCalldataGasUsed = await contractInteractor.calculateCalldataGasUsed(encodedData, defaultEnvironment, 1, ethersProvider)
                   const calldataOverchargeGas =
                     (parseInt(relayRequest.relayData.transactionCalldataGasUsed) - actualTransactionCalldataGasUsed)
                   const calldataOverchargeWei = gasPrice.muln(calldataOverchargeGas)
@@ -618,7 +623,9 @@ contract('RelayHub gas calculations', function ([_, relayOwner, relayWorker, rel
                   assert.equal(expectedPaymasterBalance.toString(), afterBalances.paymasters.toString())
                 })
             })
+          }
           )
+      }
       )
   })
 })

@@ -1,29 +1,28 @@
 // @ts-ignore
 import ethWallet from 'ethereumjs-wallet'
-import Web3 from 'web3'
-import { PrefixedHexString } from 'ethereumjs-util'
-import { RLPEncodedTransaction } from 'web3-core'
-import { FeeMarketEIP1559Transaction, Transaction } from '@ethereumjs/tx'
+import { type JsonRpcSigner, type TransactionRequest } from '@ethersproject/providers'
+import { Wallet } from '@ethersproject/wallet'
+import { type PrefixedHexString } from 'ethereumjs-util'
+import { parse } from '@ethersproject/transactions'
 import {
   SignTypedDataVersion,
-  TypedMessage,
+  type TypedMessage,
   personalSign,
   recoverTypedSignature,
   signTypedData
 } from '@metamask/eth-sig-util'
 
 import {
-  Address,
-  RelayRequest,
+  type Address,
+  type RelayRequest,
+  type RLPEncodedTransaction,
   TypedRequestData,
-  Web3ProviderBaseInterface,
   getEip712Signature,
-  getRawTxOptions,
   isSameAddress,
   removeHexPrefix
 } from '@opengsn/common'
 
-import { GSNConfig } from './GSNConfigurator'
+import { type GSNConfig } from './GSNConfigurator'
 
 export interface AccountKeypair {
   privateKey: PrefixedHexString
@@ -36,13 +35,14 @@ function toAddress (privateKey: PrefixedHexString): Address {
 }
 
 export class AccountManager {
-  private readonly web3: Web3
+  // private readonly provider: JsonRpcProvider
+  private signer: JsonRpcSigner
   private readonly accounts: AccountKeypair[] = []
   private readonly config: GSNConfig
   readonly chainId: number
 
-  constructor (provider: Web3ProviderBaseInterface, chainId: number, config: GSNConfig) {
-    this.web3 = new Web3(provider as any)
+  constructor (signer: JsonRpcSigner, chainId: number, config: GSNConfig) {
+    this.signer = signer
     this.chainId = chainId
     this.config = config
   }
@@ -87,23 +87,23 @@ export class AccountManager {
     return personalSign({ privateKey, data: message })
   }
 
-  signTransaction (transactionConfig: TransactionConfig, from: Address): RLPEncodedTransaction {
-    let transaction: Transaction | FeeMarketEIP1559Transaction
+  async signTransaction (transactionConfig: TransactionRequest, from: Address): Promise<RLPEncodedTransaction> {
     if (transactionConfig.chainId != null && transactionConfig.chainId !== this.chainId) {
       throw new Error(`This provider is initialized for chainId ${this.chainId} but transaction targets chainId ${transactionConfig.chainId}`)
     }
-    const commonTxOptions = getRawTxOptions(this.chainId, 0)
-    const fixGasLimitName = { ...transactionConfig, gasLimit: transactionConfig.gas }
-    if (transactionConfig.gasPrice != null) {
-      // annoying - '@ethereumjs/tx' imports BN.js@^4.x.x while we use ^5.x.x
-      // @ts-ignore
-      transaction = new Transaction(fixGasLimitName, commonTxOptions)
-    } else {
-      // @ts-ignore
-      transaction = new FeeMarketEIP1559Transaction(fixGasLimitName, commonTxOptions)
-    }
     const privateKeyBuf = Buffer.from(removeHexPrefix(this.findPrivateKey(from)), 'hex')
-    const raw = '0x' + transaction.sign(privateKeyBuf).serialize().toString('hex')
+
+    const wallet = new Wallet(privateKeyBuf)
+
+    // if called from Web3.js Provider, the 'transactionConfig' object will have 'gas' field instead of 'gasLimit'
+    const gasLimit = transactionConfig.gasLimit ?? (transactionConfig as any).gas
+    // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
+    const type: number = transactionConfig.type ?? (transactionConfig.maxFeePerGas == null) ? 0 : 2
+    const chainId = transactionConfig.chainId ?? this.chainId
+    const transactionRequest = Object.assign({}, transactionConfig, { gasLimit, type, chainId })
+    delete (transactionRequest as any).gas
+    const raw = await wallet.signTransaction(transactionRequest)
+    const transaction = parse(raw)
     // even more annoying is that 'RLPEncodedTransaction', which is expected return type here, is not yet 1559-ready
     // @ts-ignore
     return { raw, tx: transaction }
@@ -150,9 +150,9 @@ export class AccountManager {
         signature,
         version: SignTypedDataVersion.V4
       })
-    } catch (error) {
+    } catch (error: any) {
       // eslint-disable-next-line @typescript-eslint/restrict-template-expressions
-      throw new Error(`Failed to sign relayed transaction for ${relayRequest.request.from}: ${error}`)
+      throw new Error(`Failed to sign relayed transaction for ${relayRequest.request.from}: ${error.message}`)
     }
     if (!isSameAddress(relayRequest.request.from.toLowerCase(), rec)) {
       // eslint-disable-next-line @typescript-eslint/restrict-template-expressions
@@ -161,15 +161,13 @@ export class AccountManager {
     return signature
   }
 
-  // These methods is extracted to
+  // These methods are extracted to
   // a) allow different implementations in the future, and
   // b) allow spying on Account Manager in tests
   async _signWithProvider (signedData: any): Promise<string> {
     return await getEip712Signature(
-      this.web3,
-      signedData,
-      this.config.methodSuffix,
-      this.config.jsonStringifyRequest
+      this.signer,
+      signedData
     )
   }
 
@@ -183,5 +181,9 @@ export class AccountManager {
 
   getAccounts (): string[] {
     return this.accounts.map(it => it.address)
+  }
+
+  switchSigner (signer: JsonRpcSigner): void {
+    this.signer = signer
   }
 }

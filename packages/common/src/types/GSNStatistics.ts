@@ -1,14 +1,14 @@
-import { Address, IntString, ObjectMap, SemVerString } from './Aliases'
+import { type Address, type IntString, type ObjectMap, type SemVerString } from './Aliases'
 import {
-  DepositedEventInfo,
-  GNSContractsEvent, HubAuthorizedEventInfo, HubUnauthorizedEventInfo,
-  RelayRegisteredEventInfo,
-  StakeAddedEventInfo, StakeInfo, StakePenalizedEventInfo,
-  StakeUnlockedEventInfo, StakeWithdrawnEventInfo, TransactionRejectedByPaymasterEventInfo, TransactionRelayedEventInfo
+  type DepositedEventInfo,
+  type GNSContractsEvent, type HubAuthorizedEventInfo, type HubUnauthorizedEventInfo,
+  type RelayRegisteredEventInfo,
+  type StakeAddedEventInfo, type StakeInfo, type StakePenalizedEventInfo,
+  type StakeUnlockedEventInfo, type StakeWithdrawnEventInfo, type TransactionRejectedByPaymasterEventInfo, type TransactionRelayedEventInfo
 } from './GSNContractsDataTypes'
-import { PingResponse } from '../PingResponse'
-import { GSNContractsDeployment } from '../GSNContractsDeployment'
-import { EventData } from 'web3-eth-contract'
+import { type PingResponse } from '../PingResponse'
+import { type GSNContractsDeployment } from '../GSNContractsDeployment'
+type EventData = any
 
 export interface PingResult {
   pingResponse?: PingResponse

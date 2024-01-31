@@ -1,12 +1,12 @@
 import { ether, expectEvent, expectRevert } from '@openzeppelin/test-helpers'
 
 import {
-  PenalizerInstance,
-  RelayHubInstance,
-  RelayRegistrarInstance,
-  StakeManagerInstance,
-  TestPaymasterEverythingAcceptedInstance, TestTokenInstance
-} from '@opengsn/contracts/types/truffle-contracts'
+  type PenalizerInstance,
+  type RelayHubInstance,
+  type RelayRegistrarInstance,
+  type StakeManagerInstance,
+  type TestPaymasterEverythingAcceptedInstance, type TestTokenInstance
+} from '../types/truffle-contracts'
 import { deployHub } from './TestUtils'
 import { defaultEnvironment, constants, splitRelayUrlForRegistrar } from '@opengsn/common'
 

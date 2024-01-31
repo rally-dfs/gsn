@@ -3,27 +3,24 @@ import * as util from 'util'
 import path from 'path'
 import fs from 'fs'
 import {
-  defaultEnvironment,
-  DeploymentConfiguration,
-  Environment,
-  getEnvironment,
+  type DeploymentConfiguration,
+  type Environment,
+  environments,
+  EnvironmentsKeys,
   isSameAddress,
   merge
 } from '@opengsn/common'
 import { ethers } from 'hardhat'
-import { DeploymentsExtension, TxOptions } from 'hardhat-deploy/types'
-import { HardhatRuntimeEnvironment } from 'hardhat/types'
-import { HttpNetworkConfig } from 'hardhat/src/types/config'
-import { Contract } from 'ethers'
-import { formatUnits, parseUnits } from 'ethers/lib/utils'
+import { type DeploymentsExtension, type TxOptions } from 'hardhat-deploy/types'
+import { type HardhatRuntimeEnvironment } from 'hardhat/types'
+import { type HttpNetworkConfig } from 'hardhat/src/types/config'
+import { type Contract, formatUnits, parseUnits } from 'ethers'
 
 export function deploymentConfigFile (): string {
   return process.env.DEPLOY_CONFIG ?? path.resolve(__dirname, '../deployments', 'deployment-config.ts')
 }
 
-export interface DeploymentConfig {
-  [key: number]: Environment
-}
+export type DeploymentConfig = Record<number, Environment>
 
 export function fatal (...params: any): never {
   console.error(chalk.red('fatal:'), ...params)
@@ -32,12 +29,7 @@ export function fatal (...params: any): never {
 
 export function getMergedEnvironment (chainId: number, defaultDevAddress: string): Environment {
   try {
-    const env = getEnvironment(chainId) ?? { name: 'default', environment: defaultEnvironment }
-    if (env == null) {
-      fatal(`Environment with chainID ${chainId} not found`)
-    }
-    console.log('loading env ( based on chainId', chainId, ')', env.name)
-    let config: any
+    let config: Environment | undefined
     if (fs.existsSync(deploymentConfigFile())) {
       console.log('loading config file', deploymentConfigFile())
       const fileConfig = require(deploymentConfigFile()) as DeploymentConfig
@@ -49,8 +41,12 @@ export function getMergedEnvironment (chainId: number, defaultDevAddress: string
       printSampleEnvironment(defaultDevAddress, chainId)
       process.exit(1)
     }
-
-    return merge(env.environment, config)
+    const env = environments[config?.environmentsKey]
+    if (env == null) {
+      fatal(`Environment with name ${config?.environmentsKey} not found`)
+    }
+    console.log('loading env', config.environmentsKey)
+    return merge(env, config)
   } catch (e: any) {
     fatal(`Error reading config file ${deploymentConfigFile()}: ${(e as Error).message}`)
   }
@@ -62,9 +58,11 @@ export function printSampleEnvironment (defaultDevAddress: string, chainId: numb
     paymasterDeposit: '0.1',
     isArbitrum: false,
     deployTestPaymaster: true,
+    deploySingleRecipientPaymaster: false,
     minimumStakePerToken: { test: '0.5' }
   }
   const sampleEnv = {
+    environmentsKey: EnvironmentsKeys.ethereumMainnet,
     relayHubConfiguration: {
       devAddress: defaultDevAddress,
       devFee: 10
@@ -96,13 +94,14 @@ export async function getToken (address: string): Promise<Token> {
   if (symbol == null || decimals == null) {
     throw new Error(`invalid token: ${address} (Symbol: ${symbol} Decimals: ${decimals})`)
   }
-  const divisor = Math.pow(10, decimals)
+  const divisor = Math.pow(10, Number(decimals))
 
   return {
     address,
     symbol,
     decimals,
-    balanceOf: async (addr: string) => token.balanceOf(addr).then((v: any) => v.div(divisor))
+    // eslint-disable-next-line @typescript-eslint/return-await
+    balanceOf: async (addr: string) => await token.balanceOf(addr).then((v: any) => v.div(divisor))
   }
 }
 
@@ -139,18 +138,18 @@ async function getStakingInfo (hre: HardhatRuntimeEnvironment, env: Environment)
   return { stakingTokenAddress, stakingTokenValue }
 }
 
-export async function printRelayInfo (hre: HardhatRuntimeEnvironment): Promise<void> {
+export async function printRelayInfo (hre: HardhatRuntimeEnvironment, isArbitrum: boolean = false): Promise<void> {
   const { getChainId } = hre
   console.log('Connected to URL: ', (hre.network.config as HttpNetworkConfig).url)
-  const accounts = await ethers.provider.listAccounts()
-  const deployer = accounts[0]
+  const signer = await hre.ethers.provider.getSigner(0)
+  const deployer = await signer.getAddress()
 
   const chainId = parseInt(await getChainId())
   const env: Environment = getMergedEnvironment(chainId, deployer)
 
   const { stakingTokenAddress, stakingTokenValue } = await getStakingInfo(hre, env)
 
-  const hub = await hre.deployments.get('RelayHub')
+  const hub = await hre.deployments.get(isArbitrum ? 'ArbRelayHub' : 'RelayHub')
   const network = hre.network.config as HttpNetworkConfig
   console.log(chalk.white('Example for Relayer config JSON file:'))
   console.log(chalk.grey(JSON.stringify({
@@ -169,8 +168,8 @@ export async function printRelayInfo (hre: HardhatRuntimeEnvironment): Promise<v
 export async function getDeploymentEnv (hre: HardhatRuntimeEnvironment): Promise<{ deployer: string, deployments: DeploymentsExtension, env: Environment }> {
   const { deployments, getChainId } = hre
   console.log('Connected to URL: ', (hre.network.config as HttpNetworkConfig).url)
-  const accounts = await hre.ethers.provider.listAccounts()
-  const deployer = accounts[0]
+  const signer = await hre.ethers.provider.getSigner(0)
+  const deployer = await signer.getAddress()
   const chainId = parseInt(await getChainId())
   const env: Environment = getMergedEnvironment(chainId, deployer)
 
@@ -226,14 +225,16 @@ function clean (obj: any): string {
 }
 
 async function applyHubConfiguration (env: Environment, hub: Contract): Promise<void> {
-  const currentConfig = clean(await hub.getConfiguration())
+  const currentConfigProxy = await hub.getConfiguration()
+  const currentConfig = clean(currentConfigProxy.toObject())
   const newConfig = clean(env.relayHubConfiguration)
   if (currentConfig === newConfig) {
     console.log('RelayHub: no configuration change')
   } else {
     console.log('RelayHub: apply new config', newConfig)
     await hub.setConfiguration(JSON.parse(newConfig))
-    const updatedConfig = clean(await hub.getConfiguration())
+    const resultConfig = await hub.getConfiguration()
+    const updatedConfig = clean(resultConfig.toObject())
     if (updatedConfig !== newConfig) {
       throw new Error(`FATAL: get/set configuration mismatch\nset=${newConfig}\nget=${updatedConfig}}`)
     }
@@ -244,8 +245,8 @@ export async function applyDeploymentConfig (hre: HardhatRuntimeEnvironment): Pr
   const { deployments, env, deployer } = await getDeploymentEnv(hre)
 
   const contracts = await deployments.all()
-  const relayHub = contracts.RelayHub
-  const hub = new ethers.Contract(relayHub.address, relayHub.abi, ethers.provider.getSigner())
+  const relayHub = contracts.RelayHub ?? contracts.ArbRelayHub
+  const hub = new ethers.Contract(relayHub.address, relayHub.abi, await ethers.provider.getSigner())
 
   await applyHubConfiguration(env, hub)
   await applyStakingTokenConfiguration(hre, env, hub)

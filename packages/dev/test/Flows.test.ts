@@ -3,25 +3,25 @@
 // the two modes must behave just the same (with an exception of gasless test, which must fail on direct mode, and must
 // succeed in gasless)
 // the entire 'contract' test is doubled. all tests titles are prefixed by either "Direct:" or "Relay:"
-import { HttpProvider } from 'web3-core'
+import { StaticJsonRpcProvider } from '@ethersproject/providers'
 
 import { RelayProvider } from '@opengsn/provider/dist/RelayProvider'
 import {
-  Address,
-  ApprovalDataCallback,
+  type Address,
+  type ApprovalDataCallback,
   constants,
   defaultEnvironment,
-  ether,
-  registerForwarderForGsn
+  ether
 } from '@opengsn/common'
 import {
-  RelayHubInstance, StakeManagerInstance,
-  TestPaymasterEverythingAcceptedInstance, TestPaymasterPreconfiguredApprovalInstance,
-  TestRecipientInstance, TestTokenInstance
-} from '@opengsn/contracts/types/truffle-contracts'
+  type RelayHubInstance, type StakeManagerInstance,
+  type TestPaymasterEverythingAcceptedInstance, type TestPaymasterPreconfiguredApprovalInstance,
+  type TestRecipientInstance, type TestTokenInstance
+} from '../types/truffle-contracts'
 import { deployHub, emptyBalance, startRelay, stopRelay } from './TestUtils'
-import { ChildProcessWithoutNullStreams } from 'child_process'
-import { defaultGsnConfig, GSNConfig } from '@opengsn/provider/dist/GSNConfigurator'
+import { type ChildProcessWithoutNullStreams } from 'child_process'
+import { defaultGsnConfig, type GSNConfig } from '@opengsn/provider/dist/GSNConfigurator'
+import { registerForwarderForGsn } from '@opengsn/cli/dist/ForwarderUtil'
 
 import Web3 from 'web3'
 
@@ -63,6 +63,9 @@ options.forEach(params => {
     let relayproc: ChildProcessWithoutNullStreams
     let relayClientConfig: Partial<GSNConfig>
     let relayProvider: RelayProvider
+    // @ts-ignore
+    const currentProviderHost = web3.currentProvider.host
+    const provider = new StaticJsonRpcProvider(currentProviderHost)
 
     before(async () => {
       await emptyBalance(gasless, accounts[0])
@@ -82,7 +85,6 @@ options.forEach(params => {
           stake,
           stakeTokenAddress: testToken.address,
           delay: 3600 * 24 * 7,
-          url: 'asd',
           relayOwner: accounts[0],
           // @ts-ignore
           ethereumNodeUrl: web3.currentProvider.host,
@@ -112,7 +114,7 @@ options.forEach(params => {
     })
 
     after(async function () {
-      await stopRelay(relayproc)
+      stopRelay(relayproc)
     })
 
     if (params.relay) {
@@ -126,11 +128,11 @@ options.forEach(params => {
           maxPaymasterDataLength: 4
         }
 
-        relayProvider = await RelayProvider.newProvider(
+        relayProvider = await RelayProvider.newWeb3Provider(
           {
-            provider: web3.currentProvider as HttpProvider,
+            provider,
             config: relayClientConfig
-          }).init()
+          })
 
         // web3.setProvider(relayProvider)
 
@@ -151,7 +153,7 @@ options.forEach(params => {
       let res
       try {
         const gas = await sr.contract.methods.emitMessage('hello').estimateGas()
-        res = await sr.emitMessage('hello', { from: from, gas })
+        res = await sr.emitMessage('hello', { from, gas })
       } catch (e: any) {
         console.log('error is ', e.message)
         throw e
@@ -199,11 +201,11 @@ options.forEach(params => {
        */
       describe('with different gas limits', function () {
         before(async function () {
-          relayProvider = await RelayProvider.newProvider(
+          relayProvider = await RelayProvider.newWeb3Provider(
             {
-              provider: web3.currentProvider as HttpProvider,
+              provider,
               config: relayClientConfig
-            }).init()
+            })
         });
         // note: cannot set 'innerGasLimit' too close to 'maxViewableGasLimit' and expect it to pass
         [1e4, 1e5, 1e6, 1e7]
@@ -233,22 +235,22 @@ options.forEach(params => {
           await approvalPaymaster.setTrustedForwarder(await sr.getTrustedForwarder())
           await rhub.depositFor(approvalPaymaster.address, { value: (1e18).toString() })
           relayClientConfig = { ...relayClientConfig, ...{ paymasterAddress: approvalPaymaster.address }, performDryRunViewRelayCall: false }
-          const relayProvider = await RelayProvider.newProvider(
+          const relayProvider = await RelayProvider.newWeb3Provider(
             {
-              provider: web3.currentProvider as HttpProvider,
+              provider,
               config: relayClientConfig
-            }).init()
+            })
           // @ts-ignore
           TestRecipient.web3.setProvider(relayProvider)
         })
 
         const setRecipientProvider = async function (asyncApprovalData: ApprovalDataCallback): Promise<void> {
           const relayProvider =
-            await RelayProvider.newProvider({
-              provider: web3.currentProvider as HttpProvider,
+            await RelayProvider.newWeb3Provider({
+              provider,
               config: relayClientConfig,
               overrideDependencies: { asyncApprovalData }
-            }).init()
+            })
           // @ts-ignore
           TestRecipient.web3.setProvider(relayProvider)
         }

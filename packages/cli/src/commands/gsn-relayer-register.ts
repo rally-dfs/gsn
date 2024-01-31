@@ -1,6 +1,8 @@
+import { BigNumber } from '@ethersproject/bignumber'
+
 import { ether } from '@opengsn/common'
 
-import { CommandsLogic, RegisterOptions } from '../CommandsLogic'
+import { CommandsLogic, type RegisterOptions } from '../CommandsLogic'
 import { getNetworkUrl, gsnCommander, getMnemonic } from '../utils'
 import { toWei } from 'web3-utils'
 import { createCommandsLogger } from '@opengsn/logger/dist/CommandsWinstonLogger'
@@ -43,7 +45,7 @@ const commander = gsnCommander(['n', 'f', 'm', 'g'])
     stake: commander.stake,
     wrap: commander.wrap,
     funds: ether(commander.funds),
-    gasPrice: commander.gasPrice != null ? toWei(commander.gasPrice, 'gwei') : undefined,
+    gasPrice: commander.gasPrice != null ? BigNumber.from(toWei(commander.gasPrice, 'gwei')) : undefined,
     relayUrl: commander.relayUrl,
     unstakeDelay: commander.unstakeDelay
   }

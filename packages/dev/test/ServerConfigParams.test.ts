@@ -4,15 +4,18 @@ import {
   filterType,
   parseServerConfig,
   resolveServerConfig,
-  ServerConfigParams,
+  type ServerConfigParams,
   serverDefaultConfiguration,
   validateBalanceParams
 } from '@opengsn/relay/dist/ServerConfigParams'
 import * as fs from 'fs'
 import { expectRevert } from '@openzeppelin/test-helpers'
+
+import { StaticJsonRpcProvider } from '@ethersproject/providers'
+
 import {
-  RelayHubInstance
-} from '@opengsn/contracts/types/truffle-contracts'
+  type RelayHubInstance
+} from '../types/truffle-contracts'
 import { constants } from '@opengsn/common'
 import { deployHub } from './TestUtils'
 
@@ -138,8 +141,8 @@ context('#ServerConfigParams', () => {
     it('should throw if workerMinBalance > workerTargetBalance', function () {
       const config: ServerConfigParams = {
         ...serverDefaultConfiguration,
-        workerTargetBalance: 1e18,
-        workerMinBalance: 2e18
+        workerTargetBalance: 1e18.toString(),
+        workerMinBalance: 2e18.toString()
       }
       try {
         validateBalanceParams(config)
@@ -151,8 +154,8 @@ context('#ServerConfigParams', () => {
     it('should throw if managerMinBalance > managerTargetBalance', function () {
       const config: ServerConfigParams = {
         ...serverDefaultConfiguration,
-        managerTargetBalance: 1e18,
-        managerMinBalance: 2e18
+        managerTargetBalance: 1e18.toString(),
+        managerMinBalance: 2e18.toString()
       }
       try {
         validateBalanceParams(config)
@@ -164,9 +167,9 @@ context('#ServerConfigParams', () => {
     it('should throw if managerTargetBalance + workerTargetBalance > withdrawToOwnerOnBalance', function () {
       const config: ServerConfigParams = {
         ...serverDefaultConfiguration,
-        managerTargetBalance: 1e18,
-        workerTargetBalance: 1e18,
-        withdrawToOwnerOnBalance: 1.9e18
+        managerTargetBalance: 1e18.toString(),
+        workerTargetBalance: 1e18.toString(),
+        withdrawToOwnerOnBalance: 1.9e18.toString()
       }
       try {
         validateBalanceParams(config)
@@ -181,27 +184,30 @@ context('#ServerConfigParams', () => {
     it('should not throw on valid balance parameters with/without owner withdrawal', function () {
       const config: ServerConfigParams = {
         ...serverDefaultConfiguration,
-        managerTargetBalance: 1e18,
-        workerTargetBalance: 1e18,
-        workerMinBalance: 0.5e18,
-        managerMinBalance: 0.5e18
+        managerTargetBalance: 1e18.toString(),
+        workerTargetBalance: 1e18.toString(),
+        workerMinBalance: 0.5e18.toString(),
+        managerMinBalance: 0.5e18.toString()
       }
       validateBalanceParams(config)
-      config.withdrawToOwnerOnBalance = 4e18
+      config.withdrawToOwnerOnBalance = 4e18.toString()
       validateBalanceParams(config)
     })
   })
 
   context('#resolveServerConfig', () => {
-    const provider = web3.currentProvider
+    // @ts-ignore
+    const currentProviderHost = web3.currentProvider.host
+    const provider = new StaticJsonRpcProvider(currentProviderHost)
     it('should fail on missing hub/oracle', async () => {
       await expectRevert(resolveServerConfig({}, provider), 'missing param: must have relayHubAddress')
     })
 
     it('should fail on invalid relayhub address', async () => {
+      // ethers.js considers invalid addresses to be ENS names
       const config = { relayHubAddress: '123' }
       await expectRevert(resolveServerConfig(config, provider),
-        'Provided address 123 is invalid, the capitalization checksum test failed, or it\'s an indirect IBAN address which can\'t be converted')
+        'network does not support ENS')
     })
 
     it('should fail on no-contract relayhub address', async () => {

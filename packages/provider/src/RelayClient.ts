@@ -1,52 +1,62 @@
-import Web3 from 'web3'
+import { AbiCoder } from '@ethersproject/abi'
+import { BigNumber } from '@ethersproject/bignumber'
 import { EventEmitter } from 'events'
-import { Provider } from '@ethersproject/abstract-provider'
-import { TransactionFactory, TypedTransaction } from '@ethereumjs/tx'
-import { bufferToHex, PrefixedHexString, toBuffer } from 'ethereumjs-util'
-import { toBN, toHex } from 'web3-utils'
+import { type ExternalProvider, JsonRpcProvider, type JsonRpcSigner, Web3Provider } from '@ethersproject/providers'
+import { type Signer } from '@ethersproject/abstract-signer'
+import { type JsonRpcApiProvider as ProviderEthersV6, type Signer as SignerEthersV6 } from 'ethers-v6'
+import { type PrefixedHexString, toBuffer } from 'ethereumjs-util'
+import { type Transaction, parse, serialize } from '@ethersproject/transactions'
 
 import {
-  Address,
-  ApprovalDataCallback,
-  AuditResponse,
+  type Address,
+  type ApprovalDataCallback,
+  type AuditResponse,
   ContractInteractor,
-  GsnTransactionDetails,
+  type EIP1559Fees,
+  type EIP712Domain,
+  type GsnTransactionDetails,
   HttpClient,
   HttpWrapper,
-  LoggerInterface,
-  ObjectMap,
-  PaymasterDataCallback,
-  PingFilter,
-  RelayCallABI,
-  RelayInfo,
-  RelayMetadata,
-  RelayRequest,
-  RelayTransactionRequest,
+  type JsonRpcPayload,
+  type JsonRpcResponse,
+  type LoggerInterface,
+  type ObjectMap,
+  type PaymasterDataCallback,
+  PaymasterType,
+  type PingFilter,
+  type RelayCallABI,
+  type RelayInfo,
+  type RelayMetadata,
+  type RelayRequest,
+  type RelayTransactionRequest,
+  TokenDomainSeparators,
   VersionsManager,
-  Web3ProviderBaseInterface,
   asRelayCallAbi,
   constants,
   decodeRevertReason,
+  getPaymasterAddressByTypeAndChain,
   getRelayRequestID,
   gsnRequiredVersion,
   gsnRuntimeVersion,
-  removeNullValues
+  isSameAddress,
+  removeNullValues,
+  toHex
 } from '@opengsn/common'
 
-import { AccountKeypair, AccountManager } from './AccountManager'
+import { type AccountKeypair, AccountManager } from './AccountManager'
 import { DefaultRelayFilter, KnownRelaysManager } from './KnownRelaysManager'
 import { RelaySelectionManager } from './RelaySelectionManager'
 import {
+  createVerifierApprovalDataCallback,
   DEFAULT_VERIFIER_SERVER_APPROVAL_DATA_LENGTH,
-  DEFAULT_VERIFIER_SERVER_URL,
-  createVerifierApprovalDataCallback
+  DEFAULT_VERIFIER_SERVER_URL
 } from './VerifierUtils'
 import { isTransactionValid, RelayedTransactionValidator } from './RelayedTransactionValidator'
-import { defaultGsnConfig, GSNConfig, GSNDependencies } from './GSNConfigurator'
+import { defaultGsnConfig, type GSNConfig, type GSNDependencies } from './GSNConfigurator'
 
 import {
   GsnDoneRefreshRelaysEvent,
-  GsnEvent,
+  type GsnEvent,
   GsnInitEvent,
   GsnNextRelayEvent,
   GsnRefreshRelaysEvent,
@@ -55,9 +65,8 @@ import {
   GsnSignRequestEvent,
   GsnValidateRequestEvent
 } from './GsnEvents'
-import { bridgeProvider } from './WrapContract'
-
-// forwarder requests are signed with expiration time.
+import { RelayCallGasLimitCalculationHelper } from '@opengsn/common/dist/RelayCallGasLimitCalculationHelper'
+import { type IPaymaster } from '@opengsn/contracts/types/ethers-contracts'
 
 // generate "approvalData" and "paymasterData" for a request.
 // both are bytes arrays. paymasterData is part of the client request.
@@ -66,22 +75,23 @@ export const EmptyDataCallback: ApprovalDataCallback & PaymasterDataCallback = a
   return '0x'
 }
 
+/**
+ * Warning: if providing custom 'PingFilter' it is important to call this one as well.
+ * The MaxMaxFeePerGas parameter only exists on the Relay Server for the sanity check (i.e. not paying 1 ETH per gas).
+ * We do not adjust a request for the MaxMaxFeePerGas, proposing gas prices above it is a sure misconfiguration.
+ */
 export const GasPricePingFilter: PingFilter = (pingResponse, gsnTransactionDetails) => {
   if (
-    parseInt(pingResponse.minMaxPriorityFeePerGas) > parseInt(gsnTransactionDetails.maxPriorityFeePerGas)
-  ) {
-    throw new Error(`Proposed priority gas fee: ${parseInt(gsnTransactionDetails.maxPriorityFeePerGas)}; relay's minMaxPriorityFeePerGas: ${pingResponse.minMaxPriorityFeePerGas}`)
+    parseInt(pingResponse.minMaxFeePerGas) >= parseInt(pingResponse.maxMaxFeePerGas)) {
+    throw new Error(`Misconfigured relay: relay's configured maxMaxFeePerGas: ${pingResponse.maxMaxFeePerGas} relay's minMaxFeePerGas: ${pingResponse.minMaxFeePerGas}`)
   }
   if (parseInt(gsnTransactionDetails.maxFeePerGas) > parseInt(pingResponse.maxMaxFeePerGas)) {
     throw new Error(`Proposed fee per gas: ${parseInt(gsnTransactionDetails.maxFeePerGas)}; relay's configured maxMaxFeePerGas: ${pingResponse.maxMaxFeePerGas}`)
   }
-  if (parseInt(gsnTransactionDetails.maxFeePerGas) < parseInt(pingResponse.minMaxFeePerGas)) {
-    throw new Error(`Proposed fee per gas: ${parseInt(gsnTransactionDetails.maxFeePerGas)}; relay's minMaxFeePerGas: ${pingResponse.minMaxFeePerGas}`)
-  }
 }
 
 export interface GSNUnresolvedConstructorInput {
-  provider: Web3ProviderBaseInterface
+  provider: SupportedProviderLikeType
   config: Partial<GSNConfig>
   overrideDependencies?: Partial<GSNDependencies>
 }
@@ -89,7 +99,7 @@ export interface GSNUnresolvedConstructorInput {
 interface RelayingAttempt {
   relayRequestID?: PrefixedHexString
   validUntilTime?: string
-  transaction?: TypedTransaction
+  transaction?: Transaction
   isRelayError?: boolean
   error?: Error
   auditPromise?: Promise<AuditResponse>
@@ -99,10 +109,105 @@ export interface RelayingResult {
   relayRequestID?: PrefixedHexString
   submissionBlock?: number
   validUntilTime?: string
-  transaction?: TypedTransaction
+  transaction?: Transaction
   pingErrors: Map<string, Error>
+  priceErrors: Map<string, Error>
   relayingErrors: Map<string, Error>
   auditPromises?: Array<Promise<AuditResponse>>
+}
+
+type sendWeb3js = (payload: JsonRpcPayload, callback: (error: Error | null, result?: JsonRpcResponse) => unknown) => void
+
+interface Web3JsProvider { send: sendWeb3js }
+
+type SupportedProviderLikeType =
+  JsonRpcProvider
+  | Signer
+  | ProviderEthersV6
+  | SignerEthersV6
+  | ExternalProvider
+  | Web3JsProvider
+
+export enum InputProviderType {
+  Web3JsProvider,
+  ProviderEthersV5,
+  SignerEthersV5,
+  ProviderEthersV6,
+  SignerEthersV6
+}
+
+// TODO: not even sure v6 provider will work if forced, not wrapped - and wrapping is PITA
+export async function wrapInputProviderLike (input: SupportedProviderLikeType): Promise<{
+  provider: JsonRpcProvider
+  signer: JsonRpcSigner
+  inputProviderType: InputProviderType
+}> {
+  // 1. detect Ethers.js Signer
+  if (
+    typeof input === 'object' &&
+    typeof (input as any).signTransaction === 'function'
+  ) {
+    const providerFromSigner = (input as any).provider
+    if (providerFromSigner == null) {
+      throw new Error('signer not connected')
+    }
+    if (JsonRpcProvider.isProvider(providerFromSigner)) {
+      return {
+        inputProviderType: InputProviderType.SignerEthersV5,
+        provider: providerFromSigner as any,
+        signer: input as any
+      }
+    } else {
+      // this seems to be Ethers v6 signer input - wrapping its provider's "send" function
+      const provider = new Web3Provider(async (method: string, params?: any[]) => {
+        const providerIn = (input as any).provider
+        return providerIn.send.bind(providerIn)(method, params)
+      })
+      // @ts-ignore
+      input._isSigner = true
+      return {
+        inputProviderType: InputProviderType.SignerEthersV6,
+        provider,
+        signer: input as any
+      }
+    }
+  }
+
+  // 2. detect Ethers.js Provider
+  if (
+    typeof input === 'object' &&
+    typeof (input as any).getSigner === 'function'
+  ) {
+    if (JsonRpcProvider.isProvider(input)) {
+      return {
+        inputProviderType: InputProviderType.ProviderEthersV5,
+        provider: input as any,
+        signer: (input as any).getSigner()
+      }
+    } else {
+      // this seems to be Ethers v6 provider input - wrapping its "send" function
+      const provider = new Web3Provider(async (method: string, params?: any[]) => {
+        return (input as any).send.bind(input)(method, params)
+      })
+      return {
+        inputProviderType: InputProviderType.ProviderEthersV6,
+        provider,
+        signer: provider.getSigner()
+      }
+    }
+  }
+
+  // 3. probably a "window.ethereum" or "Web3.js" Provider - wrap it with Ethers.js
+  if (typeof input === 'object') {
+    const provider = new Web3Provider(input as any)
+    return {
+      inputProviderType: InputProviderType.Web3JsProvider,
+      provider,
+      signer: provider.getSigner()
+    }
+  }
+
+  throw new Error('wrapInputProviderLike: input provider type is not detected.')
 }
 
 export class RelayClient {
@@ -114,6 +219,9 @@ export class RelayClient {
   private initialized = false
   logger!: LoggerInterface
   initializingPromise?: Promise<void>
+  inputProviderType!: InputProviderType
+  wrappedUnderlyingProvider!: JsonRpcProvider
+  wrappedUnderlyingSigner!: JsonRpcSigner
 
   constructor (
     rawConstructorInput: GSNUnresolvedConstructorInput
@@ -124,40 +232,28 @@ export class RelayClient {
     }
     this.rawConstructorInput = rawConstructorInput
     this.logger = rawConstructorInput.overrideDependencies?.logger ?? console
-    this.wrapEthersJsProvider()
   }
 
-  wrapEthersJsProvider (): void {
-    const provider = this.rawConstructorInput.provider as any
-    if (typeof provider.getSigner === 'function') {
-      this.rawConstructorInput.provider = bridgeProvider(provider)
-    } else if (provider instanceof Provider) {
-      throw new Error('Your "provider" instance appears to be an Ethers.js provider but it does not have a "getSigner" method. We recommend constructing JsonRpcProvider or Web3Provider yourself.')
-    } else if (typeof provider.send !== 'function' && typeof provider.sendAsync !== 'function') {
-      throw new Error('Your "provider" instance does not have neither "send" nor "sendAsync" method. This is not supported.')
-    }
-  }
-
-  async init (useTokenPaymaster = false): Promise<this> {
+  async init (): Promise<this> {
     if (this.initialized) {
       throw new Error('init() already called')
     }
-    this.initializingPromise = this._initInternal(useTokenPaymaster)
+    this.initializingPromise = this._initInternal()
     await this.initializingPromise
     this.initialized = true
     return this
   }
 
-  async _initInternal (useTokenPaymaster = false): Promise<void> {
-    this.emit(new GsnInitEvent())
+  async _initInternal (): Promise<void> {
+    this.emit(new GsnInitEvent());
+    ({
+      inputProviderType: this.inputProviderType,
+      provider: this.wrappedUnderlyingProvider,
+      signer: this.wrappedUnderlyingSigner
+    } = await wrapInputProviderLike(this.rawConstructorInput.provider))
     this.config = await this._resolveConfiguration(this.rawConstructorInput)
-    if (useTokenPaymaster && this.config.tokenPaymasterAddress !== '') {
-      this.logger.debug(`Using token paymaster ${this.config.tokenPaymasterAddress}`)
-      this.config.paymasterAddress = this.config.tokenPaymasterAddress
-    }
     this.dependencies = await this._resolveDependencies({
       config: this.config,
-      provider: this.rawConstructorInput.provider,
       overrideDependencies: this.rawConstructorInput.overrideDependencies
     })
     if (!this.config.skipErc165Check) {
@@ -194,9 +290,25 @@ export class RelayClient {
    *
    * @param {*} transaction - actual Ethereum transaction, signed by a relay
    */
-  async _broadcastRawTx (transaction: TypedTransaction): Promise<{ hasReceipt: boolean, broadcastError?: Error, wrongNonce?: boolean }> {
-    const rawTx = '0x' + transaction.serialize().toString('hex')
-    const txHash = '0x' + transaction.hash().toString('hex')
+  async _broadcastRawTx (transaction: Transaction): Promise<{
+    hasReceipt: boolean
+    broadcastError?: Error
+    wrongNonce?: boolean
+  }> {
+    const strippedTransaction = Object.assign({}, transaction)
+    delete strippedTransaction.from
+    delete strippedTransaction.hash
+    delete strippedTransaction.r
+    delete strippedTransaction.s
+    delete strippedTransaction.v
+
+    const signature = {
+      r: transaction.r ?? '',
+      s: transaction.s,
+      v: transaction.v
+    }
+    const rawTx = serialize(strippedTransaction, signature)
+    const txHash = transaction.hash ?? ''
     try {
       if (await this._isAlreadySubmitted(txHash)) {
         this.logger.debug('Not broadcasting raw transaction as our RPC endpoint already sees it')
@@ -222,9 +334,10 @@ export class RelayClient {
 
   async _isAlreadySubmitted (txHash: string): Promise<boolean> {
     const [txMinedReceipt, pendingBlock] = await Promise.all([
-      this.dependencies.contractInteractor.web3.eth.getTransactionReceipt(txHash),
+      this.dependencies.contractInteractor.provider.getTransactionReceipt(txHash),
       // mempool transactions
-      this.dependencies.contractInteractor.web3.eth.getBlock('pending')
+      // ethers.js does not really support 'pending' block yet
+      this.dependencies.contractInteractor.provider.send('eth_getBlockByNumber', ['pending', false])
     ])
 
     if (txMinedReceipt != null) {
@@ -244,17 +357,28 @@ export class RelayClient {
     const gsnTransactionDetails = { ..._gsnTransactionDetails }
     // TODO: should have a better strategy to decide how often to refresh known relays
     this.emit(new GsnRefreshRelaysEvent())
+    await this.switchSigner(_gsnTransactionDetails.from)
     await this.dependencies.knownRelaysManager.refresh()
     gsnTransactionDetails.maxFeePerGas = toHex(gsnTransactionDetails.maxFeePerGas)
     gsnTransactionDetails.maxPriorityFeePerGas = toHex(gsnTransactionDetails.maxPriorityFeePerGas)
     if (gsnTransactionDetails.gas == null) {
-      const estimated = await this.dependencies.contractInteractor.estimateGasWithoutCalldata(gsnTransactionDetails)
+      // in order to avoid using less gas in '_msgSender()', make an 'estimateGas' call from the Forwarder address
+      let from = this.dependencies.contractInteractor.getDeployment().forwarderAddress
+      let data = gsnTransactionDetails.data + gsnTransactionDetails.from.replace('0x', '')
+      if (this.config.performEstimateGasFromRealSender) {
+        // use only in case making an 'estimateGas' from Forwarder address causes exceptions
+        from = gsnTransactionDetails.from
+        data = gsnTransactionDetails.data
+      }
+      const value = '0'
+      const txDetailsFromForwarder = Object.assign({}, gsnTransactionDetails, { from, data, value })
+      const estimated = await this.dependencies.contractInteractor.estimateInnerCallGasLimit(txDetailsFromForwarder)
       gsnTransactionDetails.gas = `0x${estimated.toString(16)}`
     }
     const relayingErrors = new Map<string, Error>()
     const auditPromises: Array<Promise<AuditResponse>> = []
 
-    let relayRequest: RelayRequest
+    let relayRequest: RelayRequest | undefined
     try {
       relayRequest = await this._prepareRelayRequest(gsnTransactionDetails)
     } catch (error: any) {
@@ -262,18 +386,24 @@ export class RelayClient {
       return {
         relayingErrors,
         auditPromises,
+        priceErrors: new Map<string, Error>(),
         pingErrors: new Map<string, Error>()
       }
     }
-    if (this.config.performDryRunViewRelayCall) {
-      const dryRunError = await this._verifyDryRunSuccessful(relayRequest)
-      if (dryRunError != null) {
-        relayingErrors.set(constants.DRY_RUN_KEY, dryRunError)
-        return {
-          relayingErrors,
-          auditPromises,
-          pingErrors: new Map<string, Error>()
-        }
+
+    const gasAndDataLimits = await this.dependencies.contractInteractor.getGasAndDataLimitsFromPaymaster(relayRequest.relayData.paymaster)
+
+    const {
+      error: dryRunError,
+      viewCallGasLimit
+    } = await this._verifyDryRunSuccessful(relayRequest, gasAndDataLimits)
+    if (dryRunError != null) {
+      relayingErrors.set(constants.DRY_RUN_KEY, dryRunError)
+      return {
+        relayingErrors,
+        auditPromises,
+        priceErrors: new Map<string, Error>(),
+        pingErrors: new Map<string, Error>()
       }
     }
 
@@ -290,10 +420,16 @@ export class RelayClient {
     while (true) {
       let relayingAttempt: RelayingAttempt | undefined
       const relayHub = this.dependencies.contractInteractor.getDeployment().relayHubAddress ?? ''
-      const activeRelay = await relaySelectionManager.selectNextRelay(relayHub, paymaster)
+      const relaySelectionResult = await relaySelectionManager.selectNextRelay(relayHub, paymaster)
+      const activeRelay = relaySelectionResult?.relayInfo as RelayInfo // safe to cast as R.S.M. looks up missing details internally
       if (activeRelay != null) {
+        if (relaySelectionResult != null) {
+          // adjust relay request fees for the selected relay if necessary
+          relayRequest.relayData.maxFeePerGas = toHex(relaySelectionResult.updatedGasFees.maxFeePerGas)
+          relayRequest.relayData.maxPriorityFeePerGas = toHex(relaySelectionResult.updatedGasFees.maxPriorityFeePerGas)
+        }
         this.emit(new GsnNextRelayEvent(activeRelay.relayInfo.relayUrl))
-        relayingAttempt = await this._attemptRelay(activeRelay, relayRequest)
+        relayingAttempt = await this._attemptRelay(activeRelay, relayRequest, viewCallGasLimit)
           .catch(error => ({ error }))
         if (relayingAttempt.auditPromise != null) {
           auditPromises.push(relayingAttempt.auditPromise)
@@ -313,6 +449,7 @@ export class RelayClient {
         transaction: relayingAttempt?.transaction,
         relayingErrors,
         auditPromises,
+        priceErrors: relaySelectionManager.priceErrors,
         pingErrors: relaySelectionManager.errors
       }
     }
@@ -322,15 +459,15 @@ export class RelayClient {
     this.logger.warn(msg)
   }
 
-  async calculateGasFees (): Promise<{ maxFeePerGas: PrefixedHexString, maxPriorityFeePerGas: PrefixedHexString }> {
+  async calculateGasFees (): Promise<EIP1559Fees> {
     const pct = this.config.gasPriceFactorPercent
     const gasFees = await this.dependencies.contractInteractor.getGasFees(this.config.getGasFeesBlocks, this.config.getGasFeesPercentile)
-    let priorityFee = Math.round(parseInt(gasFees.priorityFeePerGas) * (pct + 100) / 100)
+    let priorityFee = Math.round(gasFees.priorityFeePerGas.toNumber() * (pct + 100) / 100)
     if (this.config.minMaxPriorityFeePerGas != null && priorityFee < this.config.minMaxPriorityFeePerGas) {
       priorityFee = this.config.minMaxPriorityFeePerGas
     }
     const maxPriorityFeePerGas = `0x${priorityFee.toString(16)}`
-    let maxFeePerGas = `0x${Math.round((parseInt(gasFees.baseFeePerGas) + priorityFee) * (pct + 100) / 100).toString(16)}`
+    let maxFeePerGas = `0x${Math.round((gasFees.baseFeePerGas.toNumber() + priorityFee) * (pct + 100) / 100).toString(16)}`
     if (parseInt(maxFeePerGas) === 0) {
       maxFeePerGas = maxPriorityFeePerGas
     }
@@ -339,30 +476,32 @@ export class RelayClient {
 
   async _attemptRelay (
     relayInfo: RelayInfo,
-    relayRequest: RelayRequest
+    relayRequest: RelayRequest,
+    viewCallGasLimit: BigNumber
   ): Promise<RelayingAttempt> {
     this.logger.info(`attempting relay: ${JSON.stringify(relayInfo)} transaction: ${JSON.stringify(relayRequest)}`)
     await this.fillRelayInfo(relayRequest, relayInfo)
     const httpRequest = await this._prepareRelayHttpRequest(relayRequest, relayInfo)
     this.emit(new GsnValidateRequestEvent())
+    const adjustedRelayCallViewGasLimit = await this.dependencies.gasLimitCalculator.adjustRelayCallViewGasLimitForRelay(viewCallGasLimit, relayRequest.relayData.relayWorker, BigNumber.from(relayRequest.relayData.maxFeePerGas))
 
-    const error = await this._verifyViewCallSuccessful(relayInfo, asRelayCallAbi(httpRequest), false)
+    const error = await this._verifyViewCallSuccessful(relayInfo, asRelayCallAbi(httpRequest), adjustedRelayCallViewGasLimit, false)
     if (error != null) {
       return { error }
     }
     let signedTx: PrefixedHexString
     let nonceGapFilled: ObjectMap<PrefixedHexString>
-    let transaction: TypedTransaction
+    let transaction: Transaction
     let auditPromise: Promise<AuditResponse>
     this.emit(new GsnSendToRelayerEvent(relayInfo.relayInfo.relayUrl))
     try {
       ({ signedTx, nonceGapFilled } =
         await this.dependencies.httpClient.relayTransaction(relayInfo.relayInfo.relayUrl, httpRequest))
-      transaction = TransactionFactory.fromSerializedData(toBuffer(signedTx), this.dependencies.contractInteractor.getRawTxOptions())
+      transaction = parse(signedTx)
       auditPromise = this.auditTransaction(signedTx, relayInfo.relayInfo.relayUrl)
         .then((penalizeResponse) => {
           if (penalizeResponse.commitTxHash != null) {
-            const txHash = bufferToHex(transaction.hash())
+            const txHash = transaction.hash
             this.logger.error(`The transaction with id: ${txHash} was penalized! Penalization commitment tx id: ${penalizeResponse.commitTxHash}`)
           }
           return penalizeResponse
@@ -438,7 +577,7 @@ export class RelayClient {
         to: gsnTransactionDetails.to,
         data: gsnTransactionDetails.data,
         from: gsnTransactionDetails.from,
-        value: value,
+        value,
         nonce: senderNonce,
         gas: gasLimit,
         validUntilTime
@@ -461,11 +600,11 @@ export class RelayClient {
     return relayRequest
   }
 
-  fillRelayInfo (relayRequest: RelayRequest, relayInfo: RelayInfo): void {
+  async fillRelayInfo (relayRequest: RelayRequest, relayInfo: RelayInfo): Promise<void> {
     relayRequest.relayData.relayWorker = relayInfo.pingResponse.relayWorkerAddress
     // cannot estimate before relay info is filled in
     relayRequest.relayData.transactionCalldataGasUsed =
-      this.dependencies.contractInteractor.estimateCalldataCostForRequest(relayRequest, this.config)
+      await this.dependencies.contractInteractor.estimateCalldataCostForRequest(relayRequest, this.config)
   }
 
   async _prepareRelayHttpRequest (
@@ -473,6 +612,7 @@ export class RelayClient {
     relayInfo: RelayInfo
   ): Promise<RelayTransactionRequest> {
     this.emit(new GsnSignRequestEvent())
+    await this.switchSigner(relayRequest.request.from) // TODO: this redundant call is needed only for the tests that don't call to 'relayTransaction' - refactor
     const signature = await this.dependencies.accountManager.sign(this.config.domainSeparatorName, relayRequest)
     const relayRequestId = this._getRelayRequestID(relayRequest, signature)
     const approvalData = await this.dependencies.asyncApprovalData(relayRequest, relayRequestId)
@@ -547,27 +687,41 @@ export class RelayClient {
     }
   }
 
-  getUnderlyingProvider (): Web3ProviderBaseInterface {
-    return this.rawConstructorInput.provider
-  }
+  // getUnderlyingProvider (): JsonRpcProvider {
+  //   if (this.wrappedUnderlyingProvider == null) {
+  //
+  //   }
+  //   return this.wrappedUnderlyingProvider
+  // }
 
   async _resolveConfiguration ({
-    provider,
     config = {}
   }: GSNUnresolvedConstructorInput): Promise<GSNConfig> {
-    let configFromServer = {}
-    const chainId = await new Web3(provider as any).eth.getChainId()
+    let configFromServer: Partial<GSNConfig> = {}
+    const network = await this.wrappedUnderlyingProvider.getNetwork()
+    const chainId = network.chainId
     const useClientDefaultConfigUrl = config.useClientDefaultConfigUrl ?? defaultGsnConfig.useClientDefaultConfigUrl
     if (useClientDefaultConfigUrl) {
       this.logger.debug(`Reading default client config for chainId ${chainId.toString()}`)
       configFromServer = await this._resolveConfigurationFromServer(chainId, defaultGsnConfig.clientDefaultConfigUrl)
     }
     await this._resolveVerifierConfig(config, chainId)
-    return {
+
+    // EIP-712 Domain Separators are not so much config as extra info and should be merged
+    // eslint-disable-next-line @typescript-eslint/consistent-indexed-object-style
+    const tokenPaymasterDomainSeparators: { [address: Address]: EIP712Domain } = {
+      ...TokenDomainSeparators[chainId],
+      ...configFromServer.tokenPaymasterDomainSeparators,
+      ...config.tokenPaymasterDomainSeparators
+    }
+    const resolvedConfig = {
       ...defaultGsnConfig,
       ...configFromServer,
-      ...removeNullValues(config)
+      ...removeNullValues(config),
+      ...{ tokenPaymasterDomainSeparators }
     }
+    this.logger.debug(`Fully resolved GSN configuration: ${JSON.stringify(resolvedConfig)}`)
+    return resolvedConfig
   }
 
   async _resolveVerifyingPaymasterAddress (verifierUrl: string, chainId: number): Promise<Address> {
@@ -592,7 +746,13 @@ export class RelayClient {
     }
     config.verifierServerUrl = config.verifierServerUrl ?? DEFAULT_VERIFIER_SERVER_URL
     this.logger.info(`Verifier server API Key is set - setting verifierServerUrl to ${config.verifierServerUrl}`)
-    if (config.paymasterAddress == null) {
+
+    // TODO: fetching Verifier Paymaster flow contradicts 'OfficialPaymasterDeployments' flow - choose one
+    if (
+      config.paymasterAddress == null ||
+      config.paymasterAddress === '' ||
+      config.paymasterAddress === PaymasterType.VerifyingPaymaster.valueOf()
+    ) {
       config.paymasterAddress = await this._resolveVerifyingPaymasterAddress(config.verifierServerUrl, chainId)
     }
   }
@@ -612,28 +772,38 @@ export class RelayClient {
   }
 
   async _resolveDependencies ({
-    provider,
     config,
     overrideDependencies = {}
   }: {
-    provider: Web3ProviderBaseInterface
     config: GSNConfig
     overrideDependencies?: Partial<GSNDependencies>
   }): Promise<GSNDependencies> {
     const versionManager = new VersionsManager(gsnRuntimeVersion, config.requiredVersionRange ?? gsnRequiredVersion)
+    const network = await this.wrappedUnderlyingProvider.getNetwork()
+    const chainId = parseInt(network.chainId.toString())
+    const paymasterAddress = getPaymasterAddressByTypeAndChain(config?.paymasterAddress, chainId, this.logger)
+    const useEthersV6 = this.isUsingEthersV6()
     const contractInteractor = overrideDependencies?.contractInteractor ??
       await new ContractInteractor({
-        provider,
+        useEthersV6,
+        provider: this.wrappedUnderlyingProvider,
+        signer: this.wrappedUnderlyingSigner,
         versionManager,
         logger: this.logger,
         maxPageSize: this.config.pastEventsQueryMaxPageSize,
         maxPageCount: this.config.pastEventsQueryMaxPageCount,
         environment: this.config.environment,
         domainSeparatorName: this.config.domainSeparatorName,
-        deployment: { paymasterAddress: config?.paymasterAddress }
+        calldataEstimationSlackFactor: this.config.calldataEstimationSlackFactor,
+        deployment: { paymasterAddress: paymasterAddress as any }
       }).init()
-    const chainId = contractInteractor.chainId
-    const accountManager = overrideDependencies?.accountManager ?? new AccountManager(provider, chainId, this.config)
+    const gasLimitCalculator = overrideDependencies?.gasLimitCalculator ?? new RelayCallGasLimitCalculationHelper(
+      this.logger,
+      contractInteractor,
+      this.config.calldataEstimationSlackFactor,
+      this.config.maxViewableGasLimit.toString()
+    )
+    const accountManager = overrideDependencies?.accountManager ?? new AccountManager(this.wrappedUnderlyingSigner, chainId, this.config)
 
     // TODO: accept HttpWrapper as a dependency - calling 'new' here is breaking the init flow.
     const httpWrapper = new HttpWrapper()
@@ -641,7 +811,7 @@ export class RelayClient {
     const pingFilter = overrideDependencies?.pingFilter ?? GasPricePingFilter
     const relayFilter = overrideDependencies?.relayFilter ?? DefaultRelayFilter
     const asyncApprovalData = await this._resolveVerifierApprovalDataCallback(config, httpWrapper, chainId, overrideDependencies?.asyncApprovalData)
-    const asyncPaymasterData = overrideDependencies?.asyncPaymasterData ?? EmptyDataCallback
+    const asyncPaymasterData = overrideDependencies?.asyncPaymasterData ?? this.resolveAsyncPaymasterCallback(config.paymasterAddress, config.dappOwner)
     const asyncSignTypedData = overrideDependencies?.asyncSignTypedData
     const knownRelaysManager = overrideDependencies?.knownRelaysManager ?? new KnownRelaysManager(contractInteractor, this.logger, this.config, relayFilter)
     const transactionValidator = overrideDependencies?.transactionValidator ?? new RelayedTransactionValidator(contractInteractor, this.logger, this.config)
@@ -650,6 +820,7 @@ export class RelayClient {
       logger: this.logger,
       httpClient,
       contractInteractor,
+      gasLimitCalculator,
       knownRelaysManager,
       accountManager,
       transactionValidator,
@@ -659,6 +830,20 @@ export class RelayClient {
       asyncPaymasterData,
       asyncSignTypedData
     }
+  }
+
+  isUsingEthersV6 (): boolean {
+    return (
+      this.inputProviderType === InputProviderType.ProviderEthersV6 ||
+      this.inputProviderType === InputProviderType.SignerEthersV6
+    )
+  }
+
+  isConnectedWithSigner (): boolean {
+    return (
+      this.inputProviderType === InputProviderType.SignerEthersV5 ||
+      this.inputProviderType === InputProviderType.SignerEthersV6
+    )
   }
 
   async _resolveVerifierApprovalDataCallback (
@@ -685,14 +870,25 @@ export class RelayClient {
       config.verifierServerUrl)
   }
 
-  async _verifyDryRunSuccessful (relayRequest: RelayRequest): Promise<Error | undefined> {
-    // TODO: only 3 fields are needed, extract fields instead of building stub object
+  /**
+   * @return viewCallGasLimit - just caching this value to use it again for a view call after relay worker selection
+   * @param relayRequest
+   * @param gasAndDataLimits
+   */
+  async _verifyDryRunSuccessful (
+    relayRequest: RelayRequest,
+    gasAndDataLimits: IPaymaster.GasAndDataLimitsStructOutput
+  ): Promise<
+    {
+      viewCallGasLimit: BigNumber
+      error: Error | undefined
+    }> {
     const dryRunRelayInfo: RelayInfo = {
       relayInfo: {
-        lastSeenTimestamp: toBN(0),
-        lastSeenBlockNumber: toBN(0),
-        firstSeenTimestamp: toBN(0),
-        firstSeenBlockNumber: toBN(0),
+        lastSeenTimestamp: 0,
+        lastSeenBlockNumber: 0,
+        firstSeenTimestamp: 0,
+        firstSeenBlockNumber: 0,
         relayManager: '',
         relayUrl: ''
       },
@@ -709,28 +905,61 @@ export class RelayClient {
         version: ''
       }
     }
+    const relayHubAddress = this.dependencies.contractInteractor.getDeployment().relayHubAddress ?? ''
+    const dryRunMetadata: RelayMetadata = {
+      domainSeparatorName: this.config.domainSeparatorName,
+      maxAcceptanceBudget: dryRunRelayInfo.pingResponse.maxAcceptanceBudget,
+      relayHubAddress,
+      relayRequestId: '',
+      relayMaxNonce: 0,
+      relayLastKnownNonce: 0,
+      signature: '0x' + 'ff'.repeat(65),
+      approvalData: '0x' + 'ff'.repeat(this.config.maxApprovalDataLength)
+    }
     // TODO: clone?
-    this.fillRelayInfo(relayRequest, dryRunRelayInfo)
-    // note that here 'maxAcceptanceBudget' is set to the entire transaction 'maxViewableGasLimit'
+    await this.fillRelayInfo(relayRequest, dryRunRelayInfo)
+
+    const relayTransactionRequest: RelayTransactionRequest = {
+      relayRequest,
+      metadata: dryRunMetadata
+    }
+
+    // using the same method the server uses to calculate the gas limit before making a dry-run and view-call checks
+    const { maxPossibleGasUsed } = await this.dependencies.gasLimitCalculator.calculateRelayRequestLimits(
+      relayTransactionRequest, gasAndDataLimits)
+
+    const adjustedRelayCallViewGasLimit = await this.dependencies.gasLimitCalculator.adjustRelayCallViewGasLimitForPaymaster(
+      maxPossibleGasUsed,
+      relayRequest.relayData.paymaster,
+      BigNumber.from(relayRequest.relayData.maxFeePerGas),
+      BigNumber.from(this.config.maxViewableGasLimit),
+      BigNumber.from(this.config.minViewableGasLimit)
+    )
+
     const relayCallABI: RelayCallABI = {
       domainSeparatorName: this.config.domainSeparatorName,
       relayRequest,
       signature: '0x',
       approvalData: '0x',
-      maxAcceptanceBudget: this.config.maxViewableGasLimit
+      maxAcceptanceBudget: gasAndDataLimits.acceptanceBudget.toString()
     }
-    return await this._verifyViewCallSuccessful(dryRunRelayInfo, relayCallABI, true)
+    let error: Error | undefined
+    if (this.config.performDryRunViewRelayCall) {
+      error = await this._verifyViewCallSuccessful(dryRunRelayInfo, relayCallABI, adjustedRelayCallViewGasLimit, true)
+    }
+    return { error, viewCallGasLimit: adjustedRelayCallViewGasLimit }
   }
 
   async _verifyViewCallSuccessful (
     relayInfo: RelayInfo,
     relayCallABI: RelayCallABI,
+    viewCallGasLimit: BigNumber,
     isDryRun: boolean
   ): Promise<Error | undefined> {
     const acceptRelayCallResult =
       await this.dependencies.contractInteractor.validateRelayCall(
         relayCallABI,
-        toBN(this.config.maxViewableGasLimit),
+        viewCallGasLimit,
         isDryRun)
     if (!acceptRelayCallResult.paymasterAccepted || acceptRelayCallResult.recipientReverted) {
       let message: string
@@ -745,6 +974,36 @@ export class RelayClient {
         message += '\n(You can set \'performDryRunViewRelayCall\' to \'false\' if your want to skip the DRY-RUN step)\nReported reason: '
       }
       return new Error(`${message}: ${decodeRevertReason(acceptRelayCallResult.returnValue)}`)
+    }
+  }
+
+  private resolveAsyncPaymasterCallback (
+    paymasterAddress: Address | PaymasterType | undefined,
+    dappOwner?: Address
+  ): PaymasterDataCallback {
+    if (dappOwner != null && paymasterAddress === PaymasterType.SingletonWhitelistPaymaster) {
+      // TODO: refactor
+      this.config.maxPaymasterDataLength = 32
+      return async () => { return new AbiCoder().encode(['address'], [dappOwner]) }
+    }
+    return EmptyDataCallback
+  }
+
+  // TODO: this is very ugly, but Web3.js allowed overriding 'from' and we are not ready to abandon support for it yet
+  async switchSigner (from?: string): Promise<void> {
+    let currentSignerAddress: string | undefined
+    try {
+      currentSignerAddress = await this.wrappedUnderlyingSigner.getAddress()
+    } catch (e: any) {
+      // nothing to do here - signer does not have accounts and can only work with ephemeral keys
+    }
+    if (
+      currentSignerAddress == null ||
+      (from != null && !isSameAddress(from, currentSignerAddress))
+    ) {
+      this.logger.warn('Warning: Passing "from" parameter override in transaction details is not supported in Ethers.js, may cause various bugs and support will be removed from GSN in the next major version.')
+      this.wrappedUnderlyingSigner = this.wrappedUnderlyingProvider.getSigner(from)
+      this.dependencies.accountManager.switchSigner(this.wrappedUnderlyingSigner)
     }
   }
 }
@@ -764,6 +1023,15 @@ export function _dumpRelayingResult (relayingResult: RelayingResult): string {
     str += `Relaying errors (${relayingResult.relayingErrors.size}):\n`
     Array.from(relayingResult.relayingErrors.keys()).forEach(e => {
       const err = relayingResult.relayingErrors.get(e)
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string
+      const error = err?.message ?? err?.toString() ?? ''
+      str += `${e} => ${error} stack:${err?.stack}`
+    })
+  }
+  if (relayingResult.relayingErrors.size > 0) {
+    str += `Gas Fees price errors (${relayingResult.priceErrors.size}):\n`
+    Array.from(relayingResult.priceErrors.keys()).forEach(e => {
+      const err = relayingResult.priceErrors.get(e)
       // eslint-disable-next-line @typescript-eslint/no-base-to-string
       const error = err?.message ?? err?.toString() ?? ''
       str += `${e} => ${error} stack:${err?.stack}`

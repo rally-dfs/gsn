@@ -3,9 +3,11 @@
 import { SignTypedDataVersion, recoverTypedSignature, TypedDataUtils } from '@metamask/eth-sig-util'
 import chaiAsPromised from 'chai-as-promised'
 import chai, { expect } from 'chai'
+import { BigNumber } from '@ethersproject/bignumber'
+import { StaticJsonRpcProvider } from '@ethersproject/providers'
 
 import {
-  RelayRequest,
+  type RelayRequest,
   constants,
   getEip712Signature,
   packRelayUrlForRegistrar,
@@ -21,10 +23,10 @@ import {
   GsnRequestType
 } from '@opengsn/common/dist/EIP712/TypedRequestData'
 import { expectEvent } from '@openzeppelin/test-helpers'
-import { ForwarderInstance, TestRecipientInstance, TestUtilInstance } from '@opengsn/contracts/types/truffle-contracts'
-import { bufferToHex, PrefixedHexString } from 'ethereumjs-util'
+import { type ForwarderInstance, type TestRecipientInstance, type TestUtilInstance } from '../../types/truffle-contracts'
+import { bufferToHex, type PrefixedHexString } from 'ethereumjs-util'
 import { encodeRevertReason } from '../TestUtils'
-import { DomainRegistered, RequestTypeRegistered } from '@opengsn/contracts/types/truffle-contracts/IForwarder'
+import { type DomainRegistered, type RequestTypeRegistered } from '../../types/truffle-contracts/IForwarder'
 
 import { toBN } from 'web3-utils'
 import { defaultGsnConfig } from '@opengsn/provider'
@@ -37,6 +39,10 @@ const Forwarder = artifacts.require('Forwarder')
 const TestRecipient = artifacts.require('TestRecipient')
 
 contract('Utils', function (accounts) {
+  // @ts-ignore
+  const currentProviderHost = web3.currentProvider.host
+  const provider = new StaticJsonRpcProvider(currentProviderHost)
+
   describe('#getEip712Signature()', function () {
     // ganache always reports chainId as '1'
     let chainId: number
@@ -156,7 +162,7 @@ contract('Utils', function (accounts) {
       )
 
       const sig = await getEip712Signature(
-        web3,
+        provider.getSigner(),
         dataToSign
       )
 
@@ -174,7 +180,8 @@ contract('Utils', function (accounts) {
       it('should return revert result', async function () {
         relayRequest.request.data = await recipient.contract.methods.testRevert().encodeABI()
         const sig = await getEip712Signature(
-          web3, new TypedRequestData(
+          provider.getSigner(),
+          new TypedRequestData(
             defaultGsnConfig.domainSeparatorName,
             chainId,
             forwarder,
@@ -192,7 +199,8 @@ contract('Utils', function (accounts) {
         relayRequest.request.nonce = (await forwarderInstance.getNonce(relayRequest.request.from)).toString()
 
         const sig = await getEip712Signature(
-          web3, new TypedRequestData(
+          provider.getSigner(),
+          new TypedRequestData(
             defaultGsnConfig.domainSeparatorName,
             chainId,
             forwarder,
@@ -227,9 +235,9 @@ contract('Utils', function (accounts) {
         c: null,
         d: { e: null, f: 3 },
         arr: [10, null, 30],
-        bn: toBN(123)
+        bn: BigNumber.from(123)
       }, true)).to.deep
-        .equal({ a: 1, b: 'string', d: { f: 3 }, arr: [10, null, 30], bn: toBN(123) })
+        .equal({ a: 1, b: 'string', d: { f: 3 }, arr: [10, null, 30], bn: BigNumber.from(123) })
     })
   })
 
@@ -260,17 +268,17 @@ contract('Utils', function (accounts) {
     }
 
     it('should return a single response', async () => {
-      assert.equal(await waitForSuccess([Promise.resolve(1)], [''], 100).then(r => r.winner), 1)
+      assert.deepEqual(await waitForSuccess([Promise.resolve(1)], [''], 100).then(r => r.results), [1])
     })
 
-    it('should select at random if multiple responses resolve', async () => {
-      assert.equal(await waitForSuccess([Promise.resolve(1), Promise.resolve(2)], ['a', 'b'], 100, () => 0).then(r => r.winner), 1)
-      assert.equal(await waitForSuccess([Promise.resolve(1), Promise.resolve(2)], ['a', 'b'], 100, () => 0.6).then(r => r.winner), 2)
+    it('should return a multiple responses if multiple responses resolve', async () => {
+      assert.deepEqual(await waitForSuccess([Promise.resolve(1), Promise.resolve(2)], ['a', 'b'], 100).then(r => r.results), [1, 2])
+      assert.deepEqual(await waitForSuccess([Promise.resolve(1), Promise.resolve(2)], ['a', 'b'], 100).then(r => r.results), [1, 2])
     })
 
     it('should reject with first error if all fail', async () => {
       const ret = await waitForSuccess([Promise.reject(Error('err1')), Promise.reject(Error('err2'))], ['one', 'two'], 100)
-      assert.equal(ret.winner, null)
+      assert.deepEqual(ret.results, [])
       assert.equal(ret.errors.get('one')!.message, 'err1')
     })
 
@@ -289,23 +297,16 @@ contract('Utils', function (accounts) {
         [Promise.reject(Error('err1')), after(50), after(1000)],
         ['a', 'b', 'c'],
         200)
-      assert.equal(res.winner, 50)
+      assert.deepEqual(res.results, [50])
     })
 
     it('should wait after first response', async () => {
       const res1 = await waitForSuccess(
         [after(1), after(50), after(1000)],
         ['a', 'b', 'c'],
-        200, () => 0
+        200
       )
-      assert.equal(res1.winner, 1)
-
-      const res2 = await waitForSuccess(
-        [after(1), after(50), after(1000)],
-        ['a', 'b', 'c'],
-        200, () => 0.9
-      )
-      assert.equal(res2.winner, 50)
+      assert.deepEqual(res1.results, [1, 50])
     })
 
     it('should throw if input has duplicate keys', async function () {
@@ -313,7 +314,7 @@ contract('Utils', function (accounts) {
         waitForSuccess(
           [after(1), after(50), after(1000)],
           ['a', 'b', 'a'],
-          200, () => 0.9)
+          200)
       ).to.be.eventually.rejectedWith('waitForSuccess: duplicate relay URL keys, aborting')
     })
   })

@@ -1,10 +1,11 @@
 import {
-  Address,
-  IntString,
-  NpmLogLevel
+  type Address,
+  type IntString,
+  type NpmLogLevel
 } from './types/Aliases'
-import { Environment } from './Environments'
-import { EIP712Domain } from './EIP712/TypedRequestData'
+import { type PaymasterType } from './environments/OfficialPaymasterDeployments'
+import { type Environment } from './environments/Environments'
+import { type EIP712Domain } from './EIP712/TypedRequestData'
 
 export interface LoggerConfiguration {
   logLevel: NpmLogLevel
@@ -81,6 +82,15 @@ export interface GSNConfig {
   gasPriceFactorPercent: number
 
   /**
+   * The Relay Client is allowed to accept a Relay Server that requires higher gas fees than originally proposed.
+   */
+  gasPriceSlackPercent: number
+
+  /**
+   * If the calldata gas estimation is non-deterministic, as is the case on L2s, use a factor to supply some extra gas.
+   */
+  calldataEstimationSlackFactor: number
+  /**
    * The number of past blocks to query in 'eth_getGasFees' RPC request.
    */
   getGasFeesBlocks: number
@@ -112,19 +122,19 @@ export interface GSNConfig {
   maxRelayNonceGap: number
 
   /**
-   * The address of the Payamster contract to be used.
+   * The address or type of the Paymaster contract to be used.
    */
-  paymasterAddress?: Address
+  paymasterAddress: Address | PaymasterType
 
   /**
-  * The address of the token paymaster contract used by TokenPaymasterProvider
-  */
-  tokenPaymasterAddress: Address
-
-  /**
-  * Fields required by TokenPaymasterProvider for the supported tokens
-  */
+   * Fields required by TokenPaymasterProvider for the supported tokens
+   */
   tokenPaymasterDomainSeparators: Record<Address, EIP712Domain>
+
+  /**
+   * Field required by SingletonWhitelistPaymaster to select the dapp configuration
+   */
+  dappOwner?: Address
 
   /**
    * If set to 'true' the Relay will not perform an ERC-165 interfaces check on the GSN contracts.
@@ -147,9 +157,16 @@ export interface GSNConfig {
   requestValidSeconds: number
 
   /**
-   * @deprecated
+   * The absolute maximum gas limit to pass to a view call and DRY-RUN call.
+   * Will override the maximum dictated by block size limits and entries' balances.
    */
   maxViewableGasLimit: IntString
+
+  /**
+   * The absolute minimum gas limit to pass to a view call and DRY-RUN call.
+   * If Paymaster or Worker do not have enough ether to supply it to the view call the request will fail.
+   */
+  minViewableGasLimit: string
 
   /**
    * The name of preconfigured network. Supported values: "ganacheLocal", "ethereumMainnet", "arbitrum".
@@ -180,6 +197,12 @@ export interface GSNConfig {
    * If set to 'true' the client will make the view call to the RelayHub before requesting user signature for Request.
    */
   performDryRunViewRelayCall: boolean
+
+  /**
+   * In case there is an issue making an 'estimateGas' from a Forwarder address, make it from the real sender address.
+   * Note that the estimation will not be precise in this case as '_msgSender' will consume significantly less gas.
+   */
+  performEstimateGasFromRealSender: boolean
 
   /**
    * The number of Relay Servers to be pinged simultaneously.

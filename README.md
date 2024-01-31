@@ -8,10 +8,11 @@
   <img src="https://raw.githubusercontent.com/devicons/devicon/master/icons/webpack/webpack-original-wordmark.svg" width="40" height="40"/>&nbsp;
 </div>
 
-[![<ORG_NAME>](https://circleci.com/gh/opengsn/gsn.svg?style=shield)](<LINK>)
+[![](https://circleci.com/gh/opengsn/gsn.svg?style=shield)](https://app.circleci.com/pipelines/github/opengsn/gsn?branch=master)
 ![GitHub package.json version (subfolder of monorepo)](https://img.shields.io/github/package-json/v/opengsn/gsn?filename=packages%2Fprovider%2Fpackage.json)
 
-
+[![](https://img.shields.io/bundlephobia/min/@opengsn/provider)](https://bundlephobia.com/package/@opengsn/provider)
+[![](https://img.shields.io/bundlephobia/minzip/@opengsn/provider)](https://bundlephobia.com/package/@opengsn/provider)
 # The Ethereum Gas Stations Network
 
 [![Join our Discord server!](https://invidget.switchblade.xyz/b5Jk9kWcPG)](http://discord.gg/b5Jk9kWcPG)
@@ -83,9 +84,15 @@ async function getProvider() {
       logLevel: 'debug'
     }
   }
-  const provider = await RelayProvider.newProvider({ provider: window.ethereum, config }).init()
+  // to create a Web3.js Provider object:
+  const gsnProvider = await RelayProvider.newWeb3Provider({ provider: window.ethereum, config })
+  // to create a pair of Ethers.js Provider and Signer:
+  const { gsnProvider, gsnSigner } = await RelayProvider.newEthersV5Provider({ provider: new JsonRpcProvider(url), config})
 }
 ```
+> **_NOTE:_**   You can pass `window.ethereum`, Web3.js Provider, Ethers.js Signer or Provider (both v5 or v6), in the `provider` parameter.<br/>
+> Use `newEthersV5Provider` or `newEthersV6Provider` instead of `newWeb3Provider` to create a pair of Ethers.js Provider and Signer.<br/>
+> You can also connect a single `ERC2771Recipient` contract like this: ``` const gsnContract = await connectContractToGSN(contract, config) ```
 
 Adding `ERC2771Recipient` to your target smart contract:
 ```solidity
@@ -112,7 +119,7 @@ This is only a viable approach for testing and will be immediately drained on a 
 ### [WhitelistPaymaster](https://github.com/opengsn/gsn/blob/master/packages/paymasters/contracts/WhitelistPaymaster.sol)
 This Paymaster allows you to specify an array of senders, targets, and methods that will be subsidized by it.
 
-### [Token + Permit + Uniswap Paymaster](https://github.com/opengsn/gsn/blob/fix-permitTokenPaymaster/packages/paymasters/contracts/PermitERC20UniswapV3Paymaster.sol)
+### [Token + Permit + Uniswap Paymaster](https://github.com/opengsn/gsn/blob/19ca9a91255986cf45d330f8b1c313c8d4ebd020/packages/paymasters/contracts/PermitERC20UniswapV3Paymaster.sol)
 There is no single approach to making transactions be paid for in ERC-20 tokens.
 This Paymaster uses a combination of the ERC-2612 `permit` method and a Uniswap v3 to charge users with tokens.<br>
 
@@ -123,12 +130,20 @@ virtual machine instance can be found here:<br>
 https://docs.opengsn.org/relay-server/tutorial.html
 
 ## Active deployments
-A full list of the networks with active GSN deployments can be found on the dashboard pages.
+A full list of the networks with active GSN deployments can be found here:
+
+For GSN v3:<br>
+https://docs.opengsn.org/networks/addresses.html
+
+For GSN v2:<br>
+https://docs-v2.opengsn.org/networks/addresses.html
+
+Also, you can see registered relays and deployments on dashboard pages.
 
 For GSN v2:<br>
 https://relays-v2.opengsn.org/
 
-For GSN v3-beta:<br>
+For GSN v3:<br>
 https://relays.opengsn.org/
 
 ## FAQ
@@ -155,12 +170,12 @@ include any support for meta-transactions and requires at least a single call to
 ## Resources
 
 * [GSN documentation](https://docs.opengsn.org/)
-* [GSN support forum](https://forum.opengsn.org/)
+* [GSN Discord Server](http://discord.gg/b5Jk9kWcPG)
 
 ### On GitHub
 
+* [GSN + Ethers + React + Vite - minimal viable sample](https://github.com/opengsn/react-vite-ethers-gsn-demo)
 * [GSN example integration](https://github.com/opengsn/workshop)
-* [GSN example react dapp](https://github.com/opengsn/ctf-react)
 
 ## Live demo
 
